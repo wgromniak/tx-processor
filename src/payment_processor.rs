@@ -1,15 +1,15 @@
-use crate::{
-    domain::{Account, DomainError, PaymentCommand},
-    infrastructure::AccountRepository,
-};
+use std::collections::HashMap;
+
+use crate::domain_types::{Account, ClientId, DomainError, PaymentCommand};
 
 #[derive(Debug)]
 pub struct PaymentProcessor {
-    accounts: AccountRepository,
+    accounts: HashMap<ClientId, Account>,
 }
 
+#[allow(clippy::new_without_default)]
 impl PaymentProcessor {
-    pub fn new(_accounts: AccountRepository) -> Self {
+    pub fn new() -> Self {
         unimplemented!()
     }
 

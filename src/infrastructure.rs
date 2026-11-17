@@ -1,5 +1,3 @@
-//! Concrete in-memory storage for account aggregates.
-
 use std::collections::HashMap;
 
 use crate::domain::{Account, ClientId};
@@ -9,17 +7,12 @@ pub struct AccountRepository {
     accounts: HashMap<ClientId, Account>,
 }
 
-#[allow(
-    clippy::new_without_default,
-    reason = "Repository construction is a placeholder until storage is implemented"
-)]
+#[allow(clippy::new_without_default)]
 impl AccountRepository {
-    #[must_use]
     pub fn new() -> Self {
         unimplemented!()
     }
 
-    #[must_use]
     pub fn get(&self, _client_id: ClientId) -> Option<&Account> {
         unimplemented!()
     }
@@ -32,7 +25,6 @@ impl AccountRepository {
         unimplemented!()
     }
 
-    #[must_use]
     pub fn accounts(&self) -> Vec<&Account> {
         unimplemented!()
     }

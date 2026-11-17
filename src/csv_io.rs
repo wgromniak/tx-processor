@@ -1,6 +1,25 @@
+use std::io::Read;
+
+use serde::Deserialize;
+
 use crate::domain_types::{Account, PaymentCommand};
 
-#[derive(Debug)]
+pub fn read_transactions(
+    reader: impl Read,
+) -> impl Iterator<Item = Result<TransactionRow, csv::Error>> {
+    let mut reader = csv::ReaderBuilder::new()
+        .trim(csv::Trim::All)
+        .from_reader(reader);
+    let header_error = reader.headers().err();
+    let rows = header_error.is_none().then(|| reader.into_deserialize());
+
+    header_error
+        .into_iter()
+        .map(Err)
+        .chain(rows.into_iter().flatten())
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
 pub struct TransactionRow {
     pub r#type: String,
     pub client: u16,

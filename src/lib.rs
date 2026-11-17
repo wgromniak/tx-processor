@@ -6,7 +6,6 @@
     clippy::must_use_candidate
 )]
 
-pub mod application;
 pub mod csv_io;
-pub mod domain;
-pub mod infrastructure;
+pub mod domain_types;
+pub mod payment_processor;

@@ -1,4 +1,4 @@
-use crate::domain::{Account, PaymentCommand};
+use crate::domain_types::{Account, PaymentCommand};
 
 #[derive(Debug)]
 pub struct TransactionRow {

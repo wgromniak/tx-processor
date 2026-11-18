@@ -15,6 +15,8 @@ type, client, tx, amount
 deposit, 42, 9, 2.0000
 deposit, 7, 1, 1.2345
 deposit, 7, 3, 0.0001
+withdrawal, 7, 4, 0.2346
+withdrawal, 42, 5, 3.0000
 CSV
 
 cargo run --quiet --locked -- "$test_dir/transactions.csv" > "$test_dir/accounts.csv"
@@ -22,7 +24,7 @@ cargo run --quiet --locked -- "$test_dir/transactions.csv" > "$test_dir/accounts
 diff -u - <(sort_account_rows "$test_dir/accounts.csv") <<'CSV'
 client,available,held,total,locked
 42,2.0000,0,2.0000,false
-7,1.2346,0,1.2346,false
+7,1.0000,0,1.0000,false
 CSV
 
 cat >> "$test_dir/transactions.csv" <<'CSV'
@@ -37,7 +39,7 @@ cargo run --quiet --locked -- "$test_dir/transactions.csv" \
 diff -u - <(sort_account_rows "$test_dir/accounts-with-invalid-rows.csv") <<'CSV'
 client,available,held,total,locked
 42,2.0000,0,2.0000,false
-7,2.2346,0,2.2346,false
+7,2.0000,0,2.0000,false
 CSV
 grep -Fq 'Could not read transaction:' "$test_dir/error.log"
 grep -Fq 'UnknownTransactionType("transfer")' "$test_dir/error.log"

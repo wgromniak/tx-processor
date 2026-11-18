@@ -49,15 +49,15 @@ pub struct Balance {
 
 impl Balance {
     pub fn available(&self) -> Money {
-        unimplemented!()
+        self.available
     }
 
     pub fn held(&self) -> Money {
-        unimplemented!()
+        self.held
     }
 
     pub fn total(&self) -> Money {
-        unimplemented!()
+        Money(self.available.value() + self.held.value())
     }
 }
 
@@ -147,20 +147,28 @@ pub struct Account {
 }
 
 impl Account {
-    pub fn new(_client_id: ClientId) -> Self {
-        unimplemented!()
+    pub fn new(client_id: ClientId) -> Self {
+        Self {
+            client_id,
+            balance: Balance {
+                available: Money(Decimal::ZERO),
+                held: Money(Decimal::ZERO),
+            },
+            status: AccountStatus::Active,
+            transactions: HashMap::new(),
+        }
     }
 
     pub fn client_id(&self) -> ClientId {
-        unimplemented!()
+        self.client_id
     }
 
     pub fn balance(&self) -> &Balance {
-        unimplemented!()
+        &self.balance
     }
 
     pub fn status(&self) -> AccountStatus {
-        unimplemented!()
+        self.status
     }
 
     pub fn transaction(&self, _transaction_id: TransactionId) -> Option<&Transaction> {
@@ -169,6 +177,18 @@ impl Account {
 
     pub fn apply(&mut self, _command: PaymentCommand) -> Result<(), DomainError> {
         unimplemented!()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_test_state(
+        mut self,
+        available: Money,
+        held: Money,
+        status: AccountStatus,
+    ) -> Self {
+        self.balance = Balance { available, held };
+        self.status = status;
+        self
     }
 }
 
@@ -180,8 +200,29 @@ pub enum DomainError {
 
 #[cfg(test)]
 mod tests {
-    use super::{DomainError, Money, TransactionAmount};
+    use super::{Account, AccountStatus, Balance, ClientId, DomainError, Money, TransactionAmount};
     use rust_decimal::Decimal;
+
+    #[test]
+    fn new_account_starts_active_with_a_zero_balance() {
+        let account = Account::new(ClientId(42));
+
+        assert_eq!(account.client_id(), ClientId(42));
+        assert_eq!(account.status(), AccountStatus::Active);
+        assert_eq!(account.balance().available().value(), Decimal::ZERO);
+        assert_eq!(account.balance().held().value(), Decimal::ZERO);
+        assert_eq!(account.balance().total().value(), Decimal::ZERO);
+    }
+
+    #[test]
+    fn balance_total_sums_available_and_held() {
+        let balance = Balance {
+            available: Money::new(Decimal::new(-1_234, 4)).expect("valid available balance"),
+            held: Money::new(Decimal::new(2, 0)).expect("valid held balance"),
+        };
+
+        assert_eq!(balance.total().value(), Decimal::new(18_766, 4));
+    }
 
     #[test]
     fn money_preserves_signed_values_at_supported_precision() {

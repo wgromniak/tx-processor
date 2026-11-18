@@ -45,6 +45,10 @@ impl Money {
     pub(crate) fn checked_add(self, other: Self) -> Result<Self, DomainError> {
         Self::new(self.0 + other.0)
     }
+
+    pub fn checked_sub(self, other: Self) -> Result<Self, DomainError> {
+        Self::new(self.0 - other.0)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -277,6 +281,31 @@ mod tests {
         #[case::two_minima(Money::MIN, Money::MIN)]
         fn checked_add_rejects_out_of_range_sums(#[case] left: Money, #[case] right: Money) {
             assert_eq!(left.checked_add(right), Err(DomainError::AmountOutOfRange));
+        }
+
+        #[rstest]
+        #[case::fractions(Decimal::new(3, 1), Decimal::new(2, 1), Decimal::new(1, 1))]
+        #[case::negative_result(Decimal::ZERO, Money::MAX.value(), Money::MIN.value())]
+        #[case::mixed_scales(Money::MAX.value(), Money::MAX.value().trunc(), Decimal::new(5_167, 4))]
+        #[case::cancellation(Money::MAX.value(), Money::MAX.value(), Decimal::ZERO)]
+        fn checked_sub_returns_exact_differences(
+            #[case] left: Decimal,
+            #[case] right: Decimal,
+            #[case] expected: Decimal,
+        ) {
+            let left = Money::new(left).expect("valid left operand");
+            let right = Money::new(right).expect("valid right operand");
+
+            assert_eq!(left.checked_sub(right), Ok(Money(expected)));
+        }
+
+        #[rstest]
+        #[case::above_limit(Money::MAX, Money(Decimal::new(-1, 4)))]
+        #[case::below_limit(Money::MIN, Money(Decimal::new(1, 4)))]
+        #[case::maximum_minus_minimum(Money::MAX, Money::MIN)]
+        #[case::minimum_minus_maximum(Money::MIN, Money::MAX)]
+        fn checked_sub_rejects_out_of_range_differences(#[case] left: Money, #[case] right: Money) {
+            assert_eq!(left.checked_sub(right), Err(DomainError::AmountOutOfRange));
         }
     }
 

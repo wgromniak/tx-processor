@@ -357,15 +357,12 @@ mod tests {
             #[case] transition: Transition,
         ) {
             let amount = TransactionAmount::new(Decimal::ONE).expect("valid amount");
-            let mut transaction = Transaction::new(TransactionId(1), kind, amount);
-            if state != TransactionState::Normal {
-                transaction.dispute().expect("deposit can be disputed");
-            }
-            if state == TransactionState::ChargedBack {
-                transaction
-                    .chargeback()
-                    .expect("disputed deposit can be charged back");
-            }
+            let mut transaction = Transaction {
+                id: TransactionId(1),
+                kind,
+                amount: amount.money(),
+                state,
+            };
 
             assert_eq!(
                 transition(&mut transaction),

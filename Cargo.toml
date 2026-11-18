@@ -21,3 +21,6 @@ dbg_macro = "warn"
 todo = "warn"
 unimplemented = "warn"
 await_holding_lock = "deny"
+
+[dev-dependencies]
+rstest = { version = "0.28.0", default-features = false }

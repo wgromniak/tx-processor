@@ -23,9 +23,9 @@ impl Account {
         }
     }
 
-    pub(crate) fn with_available_balance(mut self, available: Money) -> Self {
-        self.balance = Balance::new(available, self.balance.held());
-        self
+    pub(crate) fn with_available_balance(mut self, available: Money) -> Result<Self, DomainError> {
+        self.balance = Balance::new(available, self.balance.held())?;
+        Ok(self)
     }
 
     pub fn client_id(&self) -> ClientId {
@@ -56,7 +56,7 @@ impl Account {
         held: Money,
         status: AccountStatus,
     ) -> Self {
-        self.balance = Balance::new(available, held);
+        self.balance = Balance::new(available, held).expect("valid test balance");
         self.status = status;
         self
     }
@@ -77,9 +77,6 @@ mod tests {
         assert_eq!(account.status(), AccountStatus::Active);
         assert_eq!(account.balance().available().value(), Decimal::ZERO);
         assert_eq!(account.balance().held().value(), Decimal::ZERO);
-        assert_eq!(
-            account.balance().total().expect("valid total").value(),
-            Decimal::ZERO
-        );
+        assert_eq!(account.balance().total().value(), Decimal::ZERO);
     }
 }

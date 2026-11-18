@@ -96,15 +96,15 @@ pub struct AccountRow {
 }
 
 impl AccountRow {
-    pub fn from_account(account: &Account) -> Result<Self, DomainError> {
+    pub fn from_account(account: &Account) -> Self {
         let balance = account.balance();
-        Ok(Self {
+        Self {
             client: account.client_id().0,
             available: balance.available().value().to_string(),
             held: balance.held().value().to_string(),
-            total: balance.total()?.value().to_string(),
+            total: balance.total().value().to_string(),
             locked: account.status() == AccountStatus::Locked,
-        })
+        }
     }
 }
 
@@ -125,7 +125,7 @@ mod tests {
         use crate::{
             account::Account,
             csv_io::AccountRow,
-            domain_types::{AccountStatus, ClientId, DomainError, Money},
+            domain_types::{AccountStatus, ClientId, Money},
         };
 
         #[test]
@@ -134,13 +134,13 @@ mod tests {
 
             assert_eq!(
                 row,
-                Ok(AccountRow {
+                AccountRow {
                     client: 42,
                     available: "0".into(),
                     held: "0".into(),
                     total: "0".into(),
                     locked: false,
-                })
+                }
             );
         }
 
@@ -156,27 +156,13 @@ mod tests {
 
             assert_eq!(
                 row,
-                Ok(AccountRow {
+                AccountRow {
                     client: 7,
                     available: "-0.1234".into(),
                     held: "2.0000".into(),
                     total: "1.8766".into(),
                     locked: true,
-                })
-            );
-        }
-
-        #[test]
-        fn propagates_an_out_of_range_account_total() {
-            let account = Account::new(ClientId(42)).with_test_state(
-                Money::MAX,
-                Money::new(Decimal::new(1, 4)).expect("valid held"),
-                AccountStatus::Active,
-            );
-
-            assert_eq!(
-                AccountRow::from_account(&account),
-                Err(DomainError::AmountOutOfRange)
+                }
             );
         }
     }

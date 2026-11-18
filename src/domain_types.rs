@@ -134,7 +134,13 @@ pub enum PaymentCommand {
 
 impl PaymentCommand {
     pub fn client_id(&self) -> ClientId {
-        unimplemented!()
+        match *self {
+            Self::Deposit { client_id, .. }
+            | Self::Withdrawal { client_id, .. }
+            | Self::Dispute { client_id, .. }
+            | Self::Resolve { client_id, .. }
+            | Self::Chargeback { client_id, .. } => client_id,
+        }
     }
 }
 
@@ -159,6 +165,11 @@ impl Account {
         }
     }
 
+    pub(crate) fn with_available_balance(mut self, available: Money) -> Self {
+        self.balance.available = available;
+        self
+    }
+
     pub fn client_id(&self) -> ClientId {
         self.client_id
     }
@@ -171,12 +182,13 @@ impl Account {
         self.status
     }
 
-    pub fn transaction(&self, _transaction_id: TransactionId) -> Option<&Transaction> {
-        unimplemented!()
+    pub fn transaction(&self, transaction_id: TransactionId) -> Option<&Transaction> {
+        self.transactions.get(&transaction_id)
     }
 
     pub fn apply(&mut self, _command: PaymentCommand) -> Result<(), DomainError> {
-        unimplemented!()
+        // Account changes will be implemented with the payment rules.
+        Ok(())
     }
 
     #[cfg(test)]

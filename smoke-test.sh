@@ -22,10 +22,15 @@ client,available,held,total,locked
 2,2,0,2,false
 CSV
 
-printf 'transfer,1,6,1\n' >> "$test_dir/transactions.csv"
-if cargo run --quiet --locked -- "$test_dir/transactions.csv" > "$test_dir/accounts.csv" 2> "$test_dir/error.log"; then
-    printf 'Expected the CLI to reject the invalid transaction\n' >&2
-    exit 1
-fi
-test ! -s "$test_dir/accounts.csv"
+cat >> "$test_dir/transactions.csv" <<'CSV'
+deposit,invalid-client,6,1
+transfer,1,7,1
+deposit,1,8,1
+CSV
+
+cargo run --quiet --locked -- "$test_dir/transactions.csv" \
+    > "$test_dir/accounts-with-invalid-rows.csv" 2> "$test_dir/error.log"
+
+diff -u "$test_dir/accounts.csv" "$test_dir/accounts-with-invalid-rows.csv"
+grep -Fq 'Could not read transaction:' "$test_dir/error.log"
 grep -Fq 'UnknownTransactionType("transfer")' "$test_dir/error.log"

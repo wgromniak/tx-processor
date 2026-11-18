@@ -29,10 +29,20 @@ fn run(input: &Path) -> Result<(), String> {
     let mut processor = PaymentProcessor::new();
 
     for row in rows {
-        let row = row.map_err(|error| format!("Could not read transaction: {error}"))?;
         let command = row
-            .into_command()
-            .map_err(|error| format!("Invalid transaction: {error:?}"))?;
+            .map_err(|error| format!("Could not read transaction: {error}"))
+            .and_then(|row| {
+                row.into_command()
+                    .map_err(|error| format!("Invalid transaction: {error:?}"))
+            });
+        let command = match command {
+            Ok(command) => command,
+            Err(error) => {
+                eprintln!("{error}");
+                continue;
+            }
+        };
+
         processor
             .process(command)
             .map_err(|error| format!("Could not process transaction: {error:?}"))?;

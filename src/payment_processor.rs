@@ -27,7 +27,9 @@ impl PaymentProcessor {
         .into_iter()
         .map(|(client_id, available)| {
             let available = Money::new(available).expect("valid fixture balance");
-            let account = Account::new(client_id).with_available_balance(available);
+            let account = Account::new(client_id)
+                .with_available_balance(available)
+                .expect("valid fixture balance");
             (client_id, account)
         })
         .collect();

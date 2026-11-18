@@ -3,8 +3,61 @@ use std::io::{self, Cursor, Read};
 use tx_processor::csv_io::{TransactionRow, read_transactions};
 
 #[test]
-fn trims_fields_and_maps_reordered_headers() {
-    let input = " amount , tx , type , client \r\n 1.2300 , 42 , deposit , 7 \r\n";
+fn reads_mixed_transactions_in_input_order() {
+    let input = "\
+type,client,tx,amount
+deposit,2,9,12.3400
+withdrawal,1,3,0.5
+dispute,2,9,
+resolve,2,9,
+chargeback,2,9,
+";
+
+    let rows = read_transactions(input.as_bytes())
+        .expect("headers should be readable")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("rows should deserialize");
+
+    assert_eq!(
+        rows,
+        [
+            TransactionRow {
+                r#type: "deposit".into(),
+                client: 2,
+                tx: 9,
+                amount: Some("12.3400".into()),
+            },
+            TransactionRow {
+                r#type: "withdrawal".into(),
+                client: 1,
+                tx: 3,
+                amount: Some("0.5".into()),
+            },
+            TransactionRow {
+                r#type: "dispute".into(),
+                client: 2,
+                tx: 9,
+                amount: None,
+            },
+            TransactionRow {
+                r#type: "resolve".into(),
+                client: 2,
+                tx: 9,
+                amount: None,
+            },
+            TransactionRow {
+                r#type: "chargeback".into(),
+                client: 2,
+                tx: 9,
+                amount: None,
+            },
+        ]
+    );
+}
+
+#[test]
+fn trims_headers_and_fields() {
+    let input = " type , client , tx , amount \n deposit , 7 , 42 , 1.2300 \n";
 
     let rows = read_transactions(input.as_bytes())
         .expect("headers should be readable")

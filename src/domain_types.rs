@@ -1,7 +1,5 @@
 use rust_decimal::Decimal;
 
-pub use crate::account::Account;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ClientId(pub u16);
 

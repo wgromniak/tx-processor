@@ -43,11 +43,7 @@ impl Money {
     }
 
     pub(crate) fn checked_add(self, other: Self) -> Result<Self, DomainError> {
-        let sum = self
-            .0
-            .checked_add(other.0)
-            .ok_or(DomainError::AmountOutOfRange)?;
-        Self::new(sum)
+        Self::new(self.0 + other.0)
     }
 }
 

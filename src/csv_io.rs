@@ -3,8 +3,11 @@ use std::io::{Read, Write};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
-use crate::domain_types::{
-    Account, AccountStatus, ClientId, DomainError, PaymentCommand, TransactionAmount, TransactionId,
+use crate::{
+    account::Account,
+    domain_types::{
+        AccountStatus, ClientId, DomainError, PaymentCommand, TransactionAmount, TransactionId,
+    },
 };
 
 pub fn read_transactions(
@@ -120,8 +123,9 @@ mod tests {
         use rust_decimal::Decimal;
 
         use crate::{
+            account::Account,
             csv_io::AccountRow,
-            domain_types::{Account, AccountStatus, ClientId, Money},
+            domain_types::{AccountStatus, ClientId, Money},
         };
 
         #[test]

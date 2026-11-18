@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-
 use rust_decimal::Decimal;
+
+pub use crate::account::Account;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ClientId(pub u16);
@@ -48,6 +48,12 @@ pub struct Balance {
 }
 
 impl Balance {
+    pub(crate) const ZERO: Self = Self::new(Money(Decimal::ZERO), Money(Decimal::ZERO));
+
+    pub(crate) const fn new(available: Money, held: Money) -> Self {
+        Self { available, held }
+    }
+
     pub fn available(&self) -> Money {
         self.available
     }
@@ -144,66 +150,6 @@ impl PaymentCommand {
     }
 }
 
-#[derive(Debug)]
-pub struct Account {
-    client_id: ClientId,
-    balance: Balance,
-    status: AccountStatus,
-    transactions: HashMap<TransactionId, Transaction>,
-}
-
-impl Account {
-    pub fn new(client_id: ClientId) -> Self {
-        Self {
-            client_id,
-            balance: Balance {
-                available: Money(Decimal::ZERO),
-                held: Money(Decimal::ZERO),
-            },
-            status: AccountStatus::Active,
-            transactions: HashMap::new(),
-        }
-    }
-
-    pub(crate) fn with_available_balance(mut self, available: Money) -> Self {
-        self.balance.available = available;
-        self
-    }
-
-    pub fn client_id(&self) -> ClientId {
-        self.client_id
-    }
-
-    pub fn balance(&self) -> &Balance {
-        &self.balance
-    }
-
-    pub fn status(&self) -> AccountStatus {
-        self.status
-    }
-
-    pub fn transaction(&self, _transaction_id: TransactionId) -> Option<&Transaction> {
-        unimplemented!()
-    }
-
-    pub fn apply(&mut self, _command: PaymentCommand) -> Result<(), DomainError> {
-        // Account changes will be implemented with the payment rules.
-        Ok(())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn with_test_state(
-        mut self,
-        available: Money,
-        held: Money,
-        status: AccountStatus,
-    ) -> Self {
-        self.balance = Balance { available, held };
-        self.status = status;
-        self
-    }
-}
-
 #[derive(Debug, PartialEq, Eq)]
 pub enum DomainError {
     ExcessivePrecision,
@@ -212,23 +158,6 @@ pub enum DomainError {
 
 #[cfg(test)]
 mod tests {
-    mod account {
-        use rust_decimal::Decimal;
-
-        use crate::domain_types::{Account, AccountStatus, ClientId};
-
-        #[test]
-        fn new_account_starts_active_with_a_zero_balance() {
-            let account = Account::new(ClientId(42));
-
-            assert_eq!(account.client_id(), ClientId(42));
-            assert_eq!(account.status(), AccountStatus::Active);
-            assert_eq!(account.balance().available().value(), Decimal::ZERO);
-            assert_eq!(account.balance().held().value(), Decimal::ZERO);
-            assert_eq!(account.balance().total().value(), Decimal::ZERO);
-        }
-    }
-
     mod balance {
         use rust_decimal::Decimal;
 

@@ -5,19 +5,22 @@ use crate::{
     domain_types::{ClientId, DomainError, PaymentCommand},
 };
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct PaymentProcessor {
     accounts: HashMap<ClientId, Account>,
 }
 
-#[allow(clippy::new_without_default)]
 impl PaymentProcessor {
+    #[must_use]
     pub fn new() -> Self {
-        Self {
-            accounts: HashMap::new(),
-        }
+        Self::default()
     }
 
+    /// Routes a command to its client account, creating the account if needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if [`Account::apply`] rejects the command.
     pub fn process(&mut self, command: PaymentCommand) -> Result<(), DomainError> {
         let client_id = command.client_id();
         self.accounts
@@ -26,6 +29,7 @@ impl PaymentProcessor {
             .apply(command)
     }
 
+    #[must_use]
     pub fn accounts(&self) -> Vec<&Account> {
         self.accounts.values().collect()
     }

@@ -17,6 +17,7 @@ pub struct Account {
 }
 
 impl Account {
+    #[must_use]
     pub fn new(client_id: ClientId) -> Self {
         Self {
             client_id,
@@ -26,18 +27,28 @@ impl Account {
         }
     }
 
+    #[must_use]
     pub fn client_id(&self) -> ClientId {
         self.client_id
     }
 
+    #[must_use]
     pub fn balance(&self) -> &Balance {
         &self.balance
     }
 
+    #[must_use]
     pub fn status(&self) -> AccountStatus {
         self.status
     }
 
+    /// Applies a deposit to this account. Other commands are currently ignored.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a deposit targets a different client, reuses a
+    /// transaction ID for this account, or puts the available or total balance
+    /// outside the supported money range.
     pub fn apply(&mut self, command: PaymentCommand) -> Result<(), DomainError> {
         if let PaymentCommand::Deposit {
             client_id,

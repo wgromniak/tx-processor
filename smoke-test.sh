@@ -21,3 +21,11 @@ client,available,held,total,locked
 1,1.5,0,1.5,false
 2,2,0,2,false
 CSV
+
+printf 'transfer,1,6,1\n' >> "$test_dir/transactions.csv"
+if cargo run --quiet --locked -- "$test_dir/transactions.csv" > "$test_dir/accounts.csv" 2> "$test_dir/error.log"; then
+    printf 'Expected the CLI to reject the invalid transaction\n' >&2
+    exit 1
+fi
+test ! -s "$test_dir/accounts.csv"
+grep -Fq 'UnknownTransactionType("transfer")' "$test_dir/error.log"

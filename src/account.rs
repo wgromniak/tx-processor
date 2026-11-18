@@ -145,46 +145,46 @@ mod tests {
         );
     }
 
-    mod apply {
+    fn deposit(transaction_id: u32, amount: Decimal) -> PaymentCommand {
+        PaymentCommand::Deposit {
+            client_id: ClientId(42),
+            transaction_id: TransactionId(transaction_id),
+            amount: TransactionAmount::new(amount).expect("valid deposit amount"),
+        }
+    }
+
+    fn withdrawal(transaction_id: u32, amount: Decimal) -> PaymentCommand {
+        PaymentCommand::Withdrawal {
+            client_id: ClientId(42),
+            transaction_id: TransactionId(transaction_id),
+            amount: TransactionAmount::new(amount).expect("valid withdrawal amount"),
+        }
+    }
+
+    fn assert_balance(account: &Account, available: Decimal, held: Decimal) {
+        assert_eq!(
+            account.balance,
+            Balance::new(
+                Money::new(available).expect("valid available"),
+                Money::new(held).expect("valid held"),
+            )
+            .expect("valid balance"),
+        );
+    }
+
+    fn deposit_transaction(transaction_id: u32, amount: Decimal) -> Transaction {
+        Transaction {
+            id: TransactionId(transaction_id),
+            kind: TransactionKind::Deposit,
+            amount: Money::new(amount).expect("valid deposit amount"),
+            state: TransactionState::Normal,
+        }
+    }
+
+    mod deposits {
         use rstest::rstest;
 
         use super::*;
-
-        fn deposit(transaction_id: u32, amount: Decimal) -> PaymentCommand {
-            PaymentCommand::Deposit {
-                client_id: ClientId(42),
-                transaction_id: TransactionId(transaction_id),
-                amount: TransactionAmount::new(amount).expect("valid deposit amount"),
-            }
-        }
-
-        fn withdrawal(transaction_id: u32, amount: Decimal) -> PaymentCommand {
-            PaymentCommand::Withdrawal {
-                client_id: ClientId(42),
-                transaction_id: TransactionId(transaction_id),
-                amount: TransactionAmount::new(amount).expect("valid withdrawal amount"),
-            }
-        }
-
-        fn assert_balance(account: &Account, available: Decimal, held: Decimal) {
-            assert_eq!(
-                account.balance,
-                Balance::new(
-                    Money::new(available).expect("valid available"),
-                    Money::new(held).expect("valid held"),
-                )
-                .expect("valid balance"),
-            );
-        }
-
-        fn deposit_transaction(transaction_id: u32, amount: Decimal) -> Transaction {
-            Transaction {
-                id: TransactionId(transaction_id),
-                kind: TransactionKind::Deposit,
-                amount: Money::new(amount).expect("valid deposit amount"),
-                state: TransactionState::Normal,
-            }
-        }
 
         #[rstest]
         #[case::new_account(
@@ -264,25 +264,15 @@ mod tests {
             );
         }
 
-        #[rstest]
-        #[case::deposit(deposit(1, Decimal::ONE))]
-        #[case::withdrawal(withdrawal(1, Decimal::ONE))]
-        fn command_for_another_client_leaves_the_account_unchanged(
-            #[case] command: PaymentCommand,
-        ) {
+        #[test]
+        fn deposit_for_another_client_leaves_the_account_unchanged() {
             let mut account = Account::new(ClientId(7));
 
-            assert_eq!(account.apply(command), Err(DomainError::ClientMismatch));
-
             assert_eq!(
-                account,
-                Account {
-                    client_id: ClientId(7),
-                    balance: Balance::ZERO,
-                    status: AccountStatus::Active,
-                    transactions: HashMap::new(),
-                }
+                account.apply(deposit(1, Decimal::ONE)),
+                Err(DomainError::ClientMismatch)
             );
+            assert_eq!(account, Account::new(ClientId(7)));
         }
 
         #[test]
@@ -352,6 +342,12 @@ mod tests {
                 }
             );
         }
+    }
+
+    mod withdrawals {
+        use rstest::rstest;
+
+        use super::*;
 
         #[rstest]
         #[case::fractional(Decimal::new(12_345, 4), Decimal::new(1, 4))]
@@ -386,6 +382,17 @@ mod tests {
             );
         }
 
+        #[test]
+        fn withdrawal_for_another_client_leaves_the_account_unchanged() {
+            let mut account = Account::new(ClientId(7));
+
+            assert_eq!(
+                account.apply(withdrawal(1, Decimal::ONE)),
+                Err(DomainError::ClientMismatch)
+            );
+            assert_eq!(account, Account::new(ClientId(7)));
+        }
+
         #[rstest]
         #[case::empty(Decimal::ZERO, Decimal::ZERO, AccountStatus::Active)]
         #[case::insufficient(Decimal::new(9_999, 4), Decimal::ZERO, AccountStatus::Active)]
@@ -397,18 +404,24 @@ mod tests {
             #[case] held: Decimal,
             #[case] status: AccountStatus,
         ) {
-            let initial = || {
-                Account::new(ClientId(42)).with_test_state(
-                    Money::new(available).expect("valid available"),
-                    Money::new(held).expect("valid held"),
-                    status,
-                    HashMap::new(),
-                )
-            };
-            let mut account = initial();
+            let mut account = Account::new(ClientId(42)).with_test_state(
+                Money::new(available).expect("valid available"),
+                Money::new(held).expect("valid held"),
+                status,
+                HashMap::new(),
+            );
+            let balance = account.balance;
 
             assert_eq!(account.apply(withdrawal(1, Decimal::ONE)), Ok(()));
-            assert_eq!(account, initial());
+            assert_eq!(
+                account,
+                Account {
+                    client_id: ClientId(42),
+                    balance,
+                    status,
+                    transactions: HashMap::new(),
+                }
+            );
         }
 
         #[rstest]

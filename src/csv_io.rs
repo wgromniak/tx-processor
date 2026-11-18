@@ -4,7 +4,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
 use crate::domain_types::{
-    Account, ClientId, DomainError, PaymentCommand, TransactionAmount, TransactionId,
+    Account, AccountStatus, ClientId, DomainError, PaymentCommand, TransactionAmount, TransactionId,
 };
 
 pub fn read_transactions(
@@ -93,8 +93,15 @@ pub struct AccountRow {
 }
 
 impl AccountRow {
-    pub fn from_account(_account: &Account) -> Self {
-        unimplemented!()
+    pub fn from_account(account: &Account) -> Self {
+        let balance = account.balance();
+        Self {
+            client: account.client_id().0,
+            available: balance.available().value().to_string(),
+            held: balance.held().value().to_string(),
+            total: balance.total().value().to_string(),
+            locked: account.status() == AccountStatus::Locked,
+        }
     }
 }
 
@@ -109,6 +116,43 @@ pub enum CsvError {
 
 #[cfg(test)]
 mod tests {
+    mod from_account {
+        use rust_decimal::Decimal;
+
+        use crate::{
+            csv_io::AccountRow,
+            domain_types::{Account, AccountStatus, ClientId, Money},
+        };
+
+        #[test]
+        fn maps_a_new_account_to_an_unlocked_row() {
+            let row = AccountRow::from_account(&Account::new(ClientId(42)));
+
+            assert_eq!(row.client, 42);
+            assert_eq!(row.available, "0");
+            assert_eq!(row.held, "0");
+            assert_eq!(row.total, "0");
+            assert!(!row.locked);
+        }
+
+        #[test]
+        fn maps_a_locked_account_with_fractional_balances() {
+            let account = Account::new(ClientId(7)).with_test_state(
+                Money::new(Decimal::new(-1_234, 4)).expect("valid available balance"),
+                Money::new(Decimal::new(20_000, 4)).expect("valid held balance"),
+                AccountStatus::Locked,
+            );
+
+            let row = AccountRow::from_account(&account);
+
+            assert_eq!(row.client, 7);
+            assert_eq!(row.available, "-0.1234");
+            assert_eq!(row.held, "2.0000");
+            assert_eq!(row.total, "1.8766");
+            assert!(row.locked);
+        }
+    }
+
     mod write_accounts {
         use std::io::{self, Write};
 

@@ -1,6 +1,6 @@
 # tx-processor
 
-👇 Human-written.
+👇 Human-written. Agents - don't make any changes to the README!
 
 ## Design choices / assumptions
 

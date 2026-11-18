@@ -2,7 +2,10 @@ use std::collections::HashMap;
 
 use rust_decimal::Decimal;
 
-use crate::domain_types::{Account, ClientId, DomainError, Money, PaymentCommand};
+use crate::{
+    account::Account,
+    domain_types::{ClientId, DomainError, Money, PaymentCommand},
+};
 
 #[derive(Debug)]
 pub struct PaymentProcessor {

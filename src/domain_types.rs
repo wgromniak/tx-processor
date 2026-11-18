@@ -261,8 +261,24 @@ mod tests {
 
         type Transition = fn(&mut Transaction) -> Result<(), DomainError>;
 
-        #[test]
-        fn allowed_transitions_preserve_transaction_details() {
+        #[rstest]
+        #[case::dispute(&[Transaction::dispute as Transition], TransactionState::Disputed)]
+        #[case::resolve(
+            &[Transaction::dispute, Transaction::resolve],
+            TransactionState::Normal
+        )]
+        #[case::redispute(
+            &[Transaction::dispute, Transaction::resolve, Transaction::dispute],
+            TransactionState::Disputed
+        )]
+        #[case::chargeback(
+            &[Transaction::dispute, Transaction::resolve, Transaction::dispute, Transaction::chargeback],
+            TransactionState::ChargedBack
+        )]
+        fn allowed_transitions_preserve_transaction_details(
+            #[case] transitions: &[Transition],
+            #[case] expected_state: TransactionState,
+        ) {
             let amount = TransactionAmount::new(Decimal::new(12_345, 4)).expect("valid amount");
             let mut transaction =
                 Transaction::new(TransactionId(u32::MAX), TransactionKind::Deposit, amount);
@@ -271,29 +287,22 @@ mod tests {
             assert!(transaction.can_be_disputed());
             assert!(!transaction.is_disputed());
 
-            for (transition, state) in [
-                (
-                    Transaction::dispute as Transition,
-                    TransactionState::Disputed,
-                ),
-                (Transaction::resolve, TransactionState::Normal),
-                (Transaction::dispute, TransactionState::Disputed),
-                (Transaction::chargeback, TransactionState::ChargedBack),
-            ] {
+            for transition in transitions {
                 assert_eq!(transition(&mut transaction), Ok(()));
-                assert_eq!(transaction.state(), state);
-                assert_eq!(
-                    transaction.can_be_disputed(),
-                    state == TransactionState::Normal
-                );
-                assert_eq!(
-                    transaction.is_disputed(),
-                    state == TransactionState::Disputed
-                );
-                assert_eq!(transaction.id(), TransactionId(u32::MAX));
-                assert_eq!(transaction.kind(), TransactionKind::Deposit);
-                assert_eq!(transaction.amount(), amount.money());
             }
+
+            assert_eq!(transaction.state(), expected_state);
+            assert_eq!(
+                transaction.can_be_disputed(),
+                expected_state == TransactionState::Normal
+            );
+            assert_eq!(
+                transaction.is_disputed(),
+                expected_state == TransactionState::Disputed
+            );
+            assert_eq!(transaction.id(), TransactionId(u32::MAX));
+            assert_eq!(transaction.kind(), TransactionKind::Deposit);
+            assert_eq!(transaction.amount(), amount.money());
         }
 
         #[rstest]

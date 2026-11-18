@@ -11,16 +11,10 @@ pub struct PaymentProcessor {
 }
 
 impl PaymentProcessor {
-    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Routes a command to its client account, creating the account if needed.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if [`Account::apply`] rejects the command.
     pub fn process(&mut self, command: PaymentCommand) -> Result<(), DomainError> {
         let client_id = command.client_id();
         self.accounts
@@ -29,7 +23,6 @@ impl PaymentProcessor {
             .apply(command)
     }
 
-    #[must_use]
     pub fn accounts(&self) -> Vec<&Account> {
         self.accounts.values().collect()
     }

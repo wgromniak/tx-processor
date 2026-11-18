@@ -10,12 +10,6 @@ use crate::{
     },
 };
 
-/// Reads the CSV header and returns an iterator that deserializes transaction rows.
-///
-/// # Errors
-///
-/// Returns an error if reading the header fails. The iterator reports errors
-/// encountered while reading or deserializing individual rows.
 pub fn read_transactions(
     reader: impl Read,
 ) -> Result<impl Iterator<Item = Result<TransactionRow, csv::Error>>, csv::Error> {
@@ -36,12 +30,6 @@ pub struct TransactionRow {
 }
 
 impl TransactionRow {
-    /// Converts a CSV row into a payment command.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for an unknown transaction type, an amount that is
-    /// missing or unexpected for that type, or an invalid decimal amount.
     pub fn into_command(self) -> Result<PaymentCommand, CsvError> {
         let client_id = ClientId(self.client);
         let transaction_id = TransactionId(self.tx);
@@ -81,11 +69,6 @@ fn parse_amount(amount: &str) -> Result<TransactionAmount, CsvError> {
     TransactionAmount::new(value).map_err(CsvError::InvalidAmount)
 }
 
-/// Writes the CSV header and account rows, then flushes the writer.
-///
-/// # Errors
-///
-/// Returns an error if serialization, writing, or flushing fails.
 pub fn write_accounts(
     writer: impl Write,
     rows: impl IntoIterator<Item = AccountRow>,
@@ -113,7 +96,6 @@ pub struct AccountRow {
 }
 
 impl AccountRow {
-    #[must_use]
     pub fn from_account(account: &Account) -> Self {
         let balance = account.balance();
         Self {

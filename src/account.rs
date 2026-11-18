@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::domain_types::{
     AccountStatus, Balance, ClientId, DomainError, PaymentCommand, Transaction, TransactionAmount,
-    TransactionId, TransactionKind, TransactionState,
+    TransactionId, TransactionKind,
 };
 
 #[cfg(test)]
@@ -107,19 +107,16 @@ impl Account {
         let Some(transaction) = self.transactions.get_mut(&transaction_id) else {
             return Ok(());
         };
-        // Only deposits can be reversed. Funds already spent still have to be held,
-        // so a dispute can make the available balance negative.
-        if transaction.kind != TransactionKind::Deposit
-            || transaction.state != TransactionState::Normal
-        {
+        if !transaction.can_be_disputed() {
             return Ok(());
         }
 
-        let available = self.balance.available().checked_sub(transaction.amount)?;
-        let held = self.balance.held().checked_add(transaction.amount)?;
+        let available = self.balance.available().checked_sub(transaction.amount())?;
+        let held = self.balance.held().checked_add(transaction.amount())?;
+        let balance = Balance::new(available, held)?;
 
-        self.balance = Balance::new(available, held)?;
-        transaction.state = TransactionState::Disputed;
+        transaction.dispute()?;
+        self.balance = balance;
         Ok(())
     }
 
@@ -127,15 +124,16 @@ impl Account {
         let Some(transaction) = self.transactions.get_mut(&transaction_id) else {
             return Ok(());
         };
-        if transaction.state != TransactionState::Disputed {
+        if !transaction.is_disputed() {
             return Ok(());
         }
 
-        let available = self.balance.available().checked_add(transaction.amount)?;
-        let held = self.balance.held().checked_sub(transaction.amount)?;
+        let available = self.balance.available().checked_add(transaction.amount())?;
+        let held = self.balance.held().checked_sub(transaction.amount())?;
+        let balance = Balance::new(available, held)?;
 
-        self.balance = Balance::new(available, held)?;
-        transaction.state = TransactionState::Normal;
+        transaction.resolve()?;
+        self.balance = balance;
         Ok(())
     }
 
@@ -143,15 +141,15 @@ impl Account {
         let Some(transaction) = self.transactions.get_mut(&transaction_id) else {
             return Ok(());
         };
-        if transaction.state != TransactionState::Disputed {
+        if !transaction.is_disputed() {
             return Ok(());
         }
 
-        let held = self.balance.held().checked_sub(transaction.amount)?;
+        let held = self.balance.held().checked_sub(transaction.amount())?;
+        let balance = Balance::new(self.balance.available(), held)?;
 
-        self.balance = Balance::new(self.balance.available(), held)?;
-        transaction.state = TransactionState::ChargedBack;
-        // Deposits and dispute processing remain allowed; withdrawals are frozen.
+        transaction.chargeback()?;
+        self.balance = balance;
         self.status = AccountStatus::Locked;
         Ok(())
     }
@@ -226,12 +224,11 @@ mod tests {
     }
 
     fn deposit_transaction(transaction_id: u32, amount: Decimal) -> Transaction {
-        Transaction {
-            id: TransactionId(transaction_id),
-            kind: TransactionKind::Deposit,
-            amount: Money::new(amount).expect("valid deposit amount"),
-            state: TransactionState::Normal,
-        }
+        Transaction::new(
+            TransactionId(transaction_id),
+            TransactionKind::Deposit,
+            TransactionAmount::new(amount).expect("valid deposit amount"),
+        )
     }
 
     mod deposits {
@@ -574,11 +571,11 @@ mod tests {
                 account.apply(command).expect("dispute transition succeeds");
                 assert_balance(&account, Decimal::new(available, 4), Decimal::new(held, 4));
                 assert_eq!(account.balance.total().value(), Decimal::new(2_346, 4));
-                assert_eq!(account.transactions[&TransactionId(1)].state, state);
+                assert_eq!(account.transactions[&TransactionId(1)].state(), state);
                 assert_eq!(account.status, AccountStatus::Active);
             }
             assert_eq!(
-                account.transactions[&TransactionId(2)].state,
+                account.transactions[&TransactionId(2)].state(),
                 TransactionState::Normal
             );
         }
@@ -598,7 +595,7 @@ mod tests {
             assert_balance(&account, Decimal::ZERO, Decimal::ONE);
             assert_eq!(account.status, AccountStatus::Locked);
             assert_eq!(
-                account.transactions[&TransactionId(1)].state,
+                account.transactions[&TransactionId(1)].state(),
                 TransactionState::ChargedBack
             );
 
@@ -615,7 +612,7 @@ mod tests {
             }
             assert!(!account.transactions.contains_key(&TransactionId(4)));
             assert_eq!(
-                account.transactions[&TransactionId(2)].state,
+                account.transactions[&TransactionId(2)].state(),
                 TransactionState::ChargedBack
             );
         }
@@ -644,7 +641,7 @@ mod tests {
             assert_balance(&account, -amount, Decimal::ZERO);
             assert_eq!(account.status, AccountStatus::Locked);
             assert_eq!(
-                account.transactions[&TransactionId(u32::MAX)].state,
+                account.transactions[&TransactionId(u32::MAX)].state(),
                 TransactionState::ChargedBack
             );
         }

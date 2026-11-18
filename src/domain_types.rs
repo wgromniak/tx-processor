@@ -123,12 +123,22 @@ pub enum TransactionState {
     ChargedBack,
 }
 
+/// Transaction fields are read-only outside this module; state changes must use
+/// the checked transition methods.
+///
+/// ```compile_fail
+/// use tx_processor::domain_types::{Transaction, TransactionState};
+///
+/// fn overwrite_state(transaction: &mut Transaction) {
+///     transaction.state = TransactionState::ChargedBack;
+/// }
+/// ```
 #[derive(Debug, PartialEq, Eq)]
 pub struct Transaction {
-    pub id: TransactionId,
-    pub kind: TransactionKind,
-    pub amount: Money,
-    pub state: TransactionState,
+    id: TransactionId,
+    kind: TransactionKind,
+    amount: Money,
+    state: TransactionState,
 }
 
 impl Transaction {
@@ -139,6 +149,54 @@ impl Transaction {
             amount: amount.money(),
             state: TransactionState::Normal,
         }
+    }
+
+    pub fn id(&self) -> TransactionId {
+        self.id
+    }
+
+    pub fn kind(&self) -> TransactionKind {
+        self.kind
+    }
+
+    pub fn amount(&self) -> Money {
+        self.amount
+    }
+
+    pub fn state(&self) -> TransactionState {
+        self.state
+    }
+
+    pub fn can_be_disputed(&self) -> bool {
+        self.kind == TransactionKind::Deposit && self.state == TransactionState::Normal
+    }
+
+    pub fn is_disputed(&self) -> bool {
+        self.state == TransactionState::Disputed
+    }
+
+    pub(crate) fn dispute(&mut self) -> Result<(), DomainError> {
+        if !self.can_be_disputed() {
+            return Err(DomainError::InvalidTransactionTransition);
+        }
+        self.state = TransactionState::Disputed;
+        Ok(())
+    }
+
+    pub(crate) fn resolve(&mut self) -> Result<(), DomainError> {
+        if !self.is_disputed() {
+            return Err(DomainError::InvalidTransactionTransition);
+        }
+        self.state = TransactionState::Normal;
+        Ok(())
+    }
+
+    pub(crate) fn chargeback(&mut self) -> Result<(), DomainError> {
+        if !self.is_disputed() {
+            return Err(DomainError::InvalidTransactionTransition);
+        }
+        self.state = TransactionState::ChargedBack;
+        Ok(())
     }
 }
 
@@ -187,10 +245,135 @@ pub enum DomainError {
     ClientMismatch,
     DuplicateTransaction,
     AmountOutOfRange,
+    InvalidTransactionTransition,
 }
 
 #[cfg(test)]
 mod tests {
+    mod transaction {
+        use rstest::rstest;
+        use rust_decimal::Decimal;
+
+        use crate::domain_types::{
+            DomainError, Transaction, TransactionAmount, TransactionId, TransactionKind,
+            TransactionState,
+        };
+
+        type Transition = fn(&mut Transaction) -> Result<(), DomainError>;
+
+        #[test]
+        fn allowed_transitions_preserve_transaction_details() {
+            let amount = TransactionAmount::new(Decimal::new(12_345, 4)).expect("valid amount");
+            let mut transaction =
+                Transaction::new(TransactionId(u32::MAX), TransactionKind::Deposit, amount);
+
+            assert_eq!(transaction.state(), TransactionState::Normal);
+            assert!(transaction.can_be_disputed());
+            assert!(!transaction.is_disputed());
+
+            for (transition, state) in [
+                (
+                    Transaction::dispute as Transition,
+                    TransactionState::Disputed,
+                ),
+                (Transaction::resolve, TransactionState::Normal),
+                (Transaction::dispute, TransactionState::Disputed),
+                (Transaction::chargeback, TransactionState::ChargedBack),
+            ] {
+                assert_eq!(transition(&mut transaction), Ok(()));
+                assert_eq!(transaction.state(), state);
+                assert_eq!(
+                    transaction.can_be_disputed(),
+                    state == TransactionState::Normal
+                );
+                assert_eq!(
+                    transaction.is_disputed(),
+                    state == TransactionState::Disputed
+                );
+                assert_eq!(transaction.id(), TransactionId(u32::MAX));
+                assert_eq!(transaction.kind(), TransactionKind::Deposit);
+                assert_eq!(transaction.amount(), amount.money());
+            }
+        }
+
+        #[rstest]
+        #[case::withdrawal_dispute(
+            TransactionKind::Withdrawal,
+            TransactionState::Normal,
+            Transaction::dispute
+        )]
+        #[case::withdrawal_resolve(
+            TransactionKind::Withdrawal,
+            TransactionState::Normal,
+            Transaction::resolve
+        )]
+        #[case::withdrawal_chargeback(
+            TransactionKind::Withdrawal,
+            TransactionState::Normal,
+            Transaction::chargeback
+        )]
+        #[case::undisputed_resolve(
+            TransactionKind::Deposit,
+            TransactionState::Normal,
+            Transaction::resolve
+        )]
+        #[case::undisputed_chargeback(
+            TransactionKind::Deposit,
+            TransactionState::Normal,
+            Transaction::chargeback
+        )]
+        #[case::repeated_dispute(
+            TransactionKind::Deposit,
+            TransactionState::Disputed,
+            Transaction::dispute
+        )]
+        #[case::charged_back_dispute(
+            TransactionKind::Deposit,
+            TransactionState::ChargedBack,
+            Transaction::dispute
+        )]
+        #[case::charged_back_resolve(
+            TransactionKind::Deposit,
+            TransactionState::ChargedBack,
+            Transaction::resolve
+        )]
+        #[case::repeated_chargeback(
+            TransactionKind::Deposit,
+            TransactionState::ChargedBack,
+            Transaction::chargeback
+        )]
+        fn invalid_transitions_leave_the_transaction_unchanged(
+            #[case] kind: TransactionKind,
+            #[case] state: TransactionState,
+            #[case] transition: Transition,
+        ) {
+            let amount = TransactionAmount::new(Decimal::ONE).expect("valid amount");
+            let mut transaction = Transaction::new(TransactionId(1), kind, amount);
+            if state != TransactionState::Normal {
+                transaction.dispute().expect("deposit can be disputed");
+            }
+            if state == TransactionState::ChargedBack {
+                transaction
+                    .chargeback()
+                    .expect("disputed deposit can be charged back");
+            }
+
+            assert_eq!(
+                transition(&mut transaction),
+                Err(DomainError::InvalidTransactionTransition)
+            );
+            assert_eq!(
+                transaction,
+                Transaction {
+                    id: TransactionId(1),
+                    kind,
+                    amount: amount.money(),
+                    state,
+                }
+            );
+        }
+    }
+
     mod balance {
         use rust_decimal::Decimal;
 

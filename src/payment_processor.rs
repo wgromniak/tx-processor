@@ -38,7 +38,7 @@ mod tests {
     use crate::account::Account;
     use crate::domain_types::{
         AccountStatus, ClientId, DomainError, Money, PaymentCommand, Transaction,
-        TransactionAmount, TransactionId, TransactionKind, TransactionState,
+        TransactionAmount, TransactionId, TransactionKind,
     };
 
     #[test]
@@ -63,12 +63,11 @@ mod tests {
         }
 
         fn deposit_transaction(transaction_id: u32, amount: Decimal) -> Transaction {
-            Transaction {
-                id: TransactionId(transaction_id),
-                kind: TransactionKind::Deposit,
-                amount: Money::new(amount).expect("valid deposit amount"),
-                state: TransactionState::Normal,
-            }
+            Transaction::new(
+                TransactionId(transaction_id),
+                TransactionKind::Deposit,
+                TransactionAmount::new(amount).expect("valid deposit amount"),
+            )
         }
 
         #[test]

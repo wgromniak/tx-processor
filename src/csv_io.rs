@@ -6,17 +6,13 @@ use crate::domain_types::{Account, PaymentCommand};
 
 pub fn read_transactions(
     reader: impl Read,
-) -> impl Iterator<Item = Result<TransactionRow, csv::Error>> {
+) -> Result<impl Iterator<Item = Result<TransactionRow, csv::Error>>, csv::Error> {
     let mut reader = csv::ReaderBuilder::new()
         .trim(csv::Trim::All)
         .from_reader(reader);
-    let header_error = reader.headers().err();
-    let rows = header_error.is_none().then(|| reader.into_deserialize());
+    reader.headers()?;
 
-    header_error
-        .into_iter()
-        .map(Err)
-        .chain(rows.into_iter().flatten())
+    Ok(reader.into_deserialize())
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]

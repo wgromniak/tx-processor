@@ -51,7 +51,9 @@ fn run(input: &Path) -> Result<(), String> {
     let accounts = processor
         .accounts()
         .into_iter()
-        .map(AccountRow::from_account);
+        .map(AccountRow::from_account)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Could not calculate account balances: {error:?}"))?;
     write_accounts(io::stdout().lock(), accounts)
         .map_err(|error| format!("Could not write accounts: {error}"))
 }

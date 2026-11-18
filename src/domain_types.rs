@@ -10,15 +10,44 @@ pub struct TransactionId(pub u32);
 pub struct Money(Decimal);
 
 impl Money {
+    /// Maximum magnitude: `(2^95 - 1) / 10_000`, approximately 3.96e24.
+    /// Reserving one coefficient bit makes the sum of any two valid values exact
+    /// at four decimal places, before checking whether the result is in range.
+    pub const MAX: Self = Self(Decimal::from_parts(
+        u32::MAX,
+        u32::MAX,
+        u32::MAX / 2,
+        false,
+        4,
+    ));
+    pub const MIN: Self = Self(Decimal::from_parts(
+        u32::MAX,
+        u32::MAX,
+        u32::MAX / 2,
+        true,
+        4,
+    ));
+
     pub fn new(value: Decimal) -> Result<Self, DomainError> {
         if value.scale() > 4 {
             return Err(DomainError::ExcessivePrecision);
+        }
+        if !(Self::MIN.0..=Self::MAX.0).contains(&value) {
+            return Err(DomainError::AmountOutOfRange);
         }
         Ok(Self(value))
     }
 
     pub fn value(self) -> Decimal {
         self.0
+    }
+
+    pub(crate) fn checked_add(self, other: Self) -> Result<Self, DomainError> {
+        let sum = self
+            .0
+            .checked_add(other.0)
+            .ok_or(DomainError::AmountOutOfRange)?;
+        Self::new(sum)
     }
 }
 
@@ -60,8 +89,8 @@ impl Balance {
         self.held
     }
 
-    pub fn total(&self) -> Money {
-        Money(self.available.value() + self.held.value())
+    pub fn total(&self) -> Result<Money, DomainError> {
+        self.available.checked_add(self.held)
     }
 }
 
@@ -152,6 +181,7 @@ impl PaymentCommand {
 pub enum DomainError {
     ExcessivePrecision,
     NonPositiveAmount,
+    AmountOutOfRange,
 }
 
 #[cfg(test)]
@@ -159,7 +189,7 @@ mod tests {
     mod balance {
         use rust_decimal::Decimal;
 
-        use crate::domain_types::{Balance, Money};
+        use crate::domain_types::{Balance, DomainError, Money};
 
         #[test]
         fn balance_total_sums_available_and_held() {
@@ -168,7 +198,17 @@ mod tests {
                 held: Money::new(Decimal::new(2, 0)).expect("valid held balance"),
             };
 
-            assert_eq!(balance.total().value(), Decimal::new(18_766, 4));
+            assert_eq!(balance.total(), Ok(Money(Decimal::new(18_766, 4))));
+        }
+
+        #[test]
+        fn balance_total_rejects_amounts_outside_the_money_range() {
+            let balance = Balance::new(
+                Money::MAX,
+                Money::new(Decimal::new(1, 4)).expect("valid held"),
+            );
+
+            assert_eq!(balance.total(), Err(DomainError::AmountOutOfRange));
         }
     }
 
@@ -181,7 +221,7 @@ mod tests {
         fn money_preserves_signed_values_at_supported_precision() {
             for value in [Decimal::ZERO, Decimal::new(1, 4), Decimal::new(-1234, 4)] {
                 let stored = Money::new(value).expect("money should support this value");
-                assert_eq!(stored.value(), value);
+                assert_eq!(stored, Money(value));
                 assert_eq!(stored.value().scale(), value.scale());
             }
         }
@@ -193,18 +233,90 @@ mod tests {
                 Err(DomainError::ExcessivePrecision)
             );
         }
+
+        #[test]
+        fn money_accepts_both_inclusive_limits() {
+            for value in [Money::MIN.value(), Money::MAX.value()] {
+                assert_eq!(Money::new(value), Ok(Money(value)));
+            }
+        }
+
+        #[test]
+        fn money_rejects_values_outside_the_range() {
+            let smallest = Decimal::new(1, 4);
+            for value in [
+                Money::MAX.value() + smallest,
+                Money::MIN.value() - smallest,
+                Decimal::MAX,
+                Decimal::MIN,
+            ] {
+                assert_eq!(Money::new(value), Err(DomainError::AmountOutOfRange));
+            }
+        }
+
+        #[test]
+        fn checked_add_preserves_four_decimal_places_at_both_limits() {
+            let smallest = Decimal::new(1, 4);
+            for (limit, step) in [(Money::MAX, smallest), (Money::MIN, -smallest)] {
+                let near_limit = Money::new(limit.value() - step).expect("within range");
+                let step = Money::new(step).expect("valid step");
+
+                assert_eq!(near_limit.checked_add(step), Ok(limit));
+                assert_eq!(step.checked_add(near_limit), Ok(limit));
+            }
+        }
+
+        #[test]
+        fn checked_add_rejects_results_outside_the_money_range() {
+            let smallest = Money::new(Decimal::new(1, 4)).expect("valid step");
+            let negative_smallest = Money::new(Decimal::new(-1, 4)).expect("valid step");
+            for (left, right) in [
+                (Money::MAX, smallest),
+                (Money::MIN, negative_smallest),
+                (Money::MAX, Money::MAX),
+                (Money::MIN, Money::MIN),
+            ] {
+                assert_eq!(left.checked_add(right), Err(DomainError::AmountOutOfRange));
+                assert_eq!(right.checked_add(left), Err(DomainError::AmountOutOfRange));
+            }
+        }
+
+        #[test]
+        fn checked_add_handles_cancellation_and_mixed_scales_exactly() {
+            assert_eq!(Money::MAX.checked_add(Money::MIN), Ok(Money(Decimal::ZERO)));
+
+            let integer = Money::new(Money::MAX.value().trunc()).expect("within range");
+            let fraction = Money::new(Decimal::new(5_167, 4)).expect("valid fraction");
+            assert_eq!(integer.checked_add(fraction), Ok(Money::MAX));
+            assert_eq!(fraction.checked_add(integer), Ok(Money::MAX));
+        }
+
+        #[test]
+        fn money_limits_leave_room_for_exact_four_decimal_addition() {
+            let maximum_coefficient = (1_i128 << 95) - 1;
+            assert_eq!(Money::MAX.value().scale(), 4);
+            assert_eq!(Money::MAX.value().mantissa(), maximum_coefficient);
+            assert_eq!(Money::MIN.value().mantissa(), -maximum_coefficient);
+
+            let doubled = Money::MAX
+                .value()
+                .checked_add(Money::MAX.value())
+                .expect("sum fits Decimal");
+            assert_eq!(doubled.scale(), 4);
+            assert_eq!(doubled.mantissa(), 2 * maximum_coefficient);
+        }
     }
 
     mod transaction_amount {
         use rust_decimal::Decimal;
 
-        use crate::domain_types::{DomainError, TransactionAmount};
+        use crate::domain_types::{DomainError, Money, TransactionAmount};
 
         #[test]
         fn transaction_amount_requires_positive_money() {
             let value = Decimal::new(1, 4);
             let amount = TransactionAmount::new(value).expect("positive money should be accepted");
-            assert_eq!(amount.money().value(), value);
+            assert_eq!(amount, TransactionAmount(Money(value)));
 
             for value in [Decimal::ZERO, Decimal::new(-1, 4)] {
                 assert_eq!(
@@ -219,6 +331,18 @@ mod tests {
             assert_eq!(
                 TransactionAmount::new(Decimal::new(1, 5)),
                 Err(DomainError::ExcessivePrecision)
+            );
+        }
+
+        #[test]
+        fn transaction_amount_enforces_the_money_limit() {
+            assert_eq!(
+                TransactionAmount::new(Money::MAX.value()),
+                Ok(TransactionAmount(Money::MAX))
+            );
+            assert_eq!(
+                TransactionAmount::new(Money::MAX.value() + Decimal::new(1, 4)),
+                Err(DomainError::AmountOutOfRange)
             );
         }
     }

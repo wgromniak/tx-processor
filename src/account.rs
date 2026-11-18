@@ -38,10 +38,6 @@ impl Account {
         self.status
     }
 
-    pub fn transaction(&self, transaction_id: TransactionId) -> Option<&Transaction> {
-        self.transactions.get(&transaction_id)
-    }
-
     pub fn apply(&mut self, command: PaymentCommand) -> Result<(), DomainError> {
         if let PaymentCommand::Deposit {
             client_id,
@@ -111,6 +107,8 @@ mod tests {
     }
 
     mod apply {
+        use rstest::rstest;
+
         use super::*;
 
         fn deposit(transaction_id: u32, amount: Decimal) -> PaymentCommand {
@@ -130,43 +128,61 @@ mod tests {
             }
         }
 
-        #[test]
-        fn deposit_credits_available_and_records_a_normal_transaction() {
-            let mut account = Account::new(ClientId(42));
-            let amount = Decimal::new(12_345, 4);
-
-            account
-                .apply(deposit(u32::MAX, amount))
-                .expect("deposit should succeed");
-
-            assert_eq!(
-                account,
-                Account {
-                    client_id: ClientId(42),
-                    balance: Balance::new(
-                        Money::new(amount).expect("valid available"),
-                        Money::new(Decimal::ZERO).expect("valid held"),
-                    )
-                    .expect("valid balance"),
-                    status: AccountStatus::Active,
-                    transactions: HashMap::from([(
-                        TransactionId(u32::MAX),
-                        deposit_transaction(u32::MAX, amount),
-                    )]),
-                }
-            );
-        }
-
-        #[test]
-        fn deposits_accumulate_exactly_with_unordered_transaction_ids() {
-            let mut account = Account::new(ClientId(42));
-            let deposits = [
+        #[rstest]
+        #[case::new_account(
+            Decimal::ZERO,
+            Decimal::ZERO,
+            AccountStatus::Active,
+            &[(u32::MAX, Decimal::new(12_345, 4))],
+            Decimal::new(12_345, 4),
+        )]
+        #[case::unordered_ids_and_exact_accumulation(
+            Decimal::ZERO,
+            Decimal::ZERO,
+            AccountStatus::Active,
+            &[
                 (9, Decimal::new(1, 1)),
                 (0, Decimal::new(2, 1)),
                 (3, Decimal::new(1, 4)),
-            ];
+            ],
+            Decimal::new(3_001, 4),
+        )]
+        #[case::negative_available_with_held_funds(
+            Decimal::new(-12_345, 4),
+            Decimal::new(2, 0),
+            AccountStatus::Active,
+            &[(1, Decimal::ONE)],
+            Decimal::new(-2_345, 4),
+        )]
+        #[case::locked_account_with_held_funds(
+            Decimal::ONE,
+            Decimal::new(2, 0),
+            AccountStatus::Locked,
+            &[(1, Decimal::ONE)],
+            Decimal::new(2, 0),
+        )]
+        #[case::money_limit(
+            Decimal::ZERO,
+            Decimal::ZERO,
+            AccountStatus::Active,
+            &[(1, Money::MAX.value())],
+            Money::MAX.value(),
+        )]
+        fn deposits_credit_available_and_record_normal_transactions(
+            #[case] available: Decimal,
+            #[case] held: Decimal,
+            #[case] status: AccountStatus,
+            #[case] deposits: &[(u32, Decimal)],
+            #[case] expected_available: Decimal,
+        ) {
+            let mut account = Account::new(ClientId(42)).with_test_state(
+                Money::new(available).expect("valid available"),
+                Money::new(held).expect("valid held"),
+                status,
+                HashMap::new(),
+            );
 
-            for (id, amount) in deposits {
+            for &(id, amount) in deposits {
                 account
                     .apply(deposit(id, amount))
                     .expect("deposit should succeed");
@@ -177,77 +193,15 @@ mod tests {
                 Account {
                     client_id: ClientId(42),
                     balance: Balance::new(
-                        Money::new(Decimal::new(3_001, 4)).expect("valid available"),
-                        Money::new(Decimal::ZERO).expect("valid held"),
+                        Money::new(expected_available).expect("valid available"),
+                        Money::new(held).expect("valid held"),
                     )
                     .expect("valid balance"),
-                    status: AccountStatus::Active,
-                    transactions: HashMap::from([
-                        (TransactionId(9), deposit_transaction(9, Decimal::new(1, 1))),
-                        (TransactionId(0), deposit_transaction(0, Decimal::new(2, 1))),
-                        (TransactionId(3), deposit_transaction(3, Decimal::new(1, 4))),
-                    ]),
-                }
-            );
-        }
-
-        #[test]
-        fn deposit_preserves_held_funds_and_can_credit_negative_available_funds() {
-            let mut account = Account::new(ClientId(42)).with_test_state(
-                Money::new(Decimal::new(-12_345, 4)).expect("valid available"),
-                Money::new(Decimal::new(2, 0)).expect("valid held"),
-                AccountStatus::Active,
-                HashMap::new(),
-            );
-
-            account
-                .apply(deposit(1, Decimal::ONE))
-                .expect("deposit should succeed");
-
-            assert_eq!(
-                account,
-                Account {
-                    client_id: ClientId(42),
-                    balance: Balance::new(
-                        Money::new(Decimal::new(-2_345, 4)).expect("valid available"),
-                        Money::new(Decimal::new(2, 0)).expect("valid held"),
-                    )
-                    .expect("valid balance"),
-                    status: AccountStatus::Active,
-                    transactions: HashMap::from([(
-                        TransactionId(1),
-                        deposit_transaction(1, Decimal::ONE),
-                    )]),
-                }
-            );
-        }
-
-        #[test]
-        fn deposit_into_a_locked_account_is_credited_without_unlocking_it() {
-            let mut account = Account::new(ClientId(42)).with_test_state(
-                Money::new(Decimal::ONE).expect("valid available"),
-                Money::new(Decimal::new(2, 0)).expect("valid held"),
-                AccountStatus::Locked,
-                HashMap::new(),
-            );
-            account
-                .apply(deposit(1, Decimal::ONE))
-                .expect("deposit into a locked account should succeed");
-
-            assert_eq!(
-                account,
-                Account {
-                    client_id: ClientId(42),
-                    balance: Balance::new(
-                        Money::new(Decimal::new(2, 0)).expect("valid available"),
-                        Money::new(Decimal::new(2, 0)).expect("valid held"),
-                    )
-                    .expect("valid balance"),
-                    status: AccountStatus::Locked,
-                    transactions: HashMap::from([(
-                        TransactionId(1),
-                        deposit_transaction(1, Decimal::ONE),
-                    )]),
+                    status,
+                    transactions: deposits
+                        .iter()
+                        .map(|&(id, amount)| (TransactionId(id), deposit_transaction(id, amount)))
+                        .collect(),
                 }
             );
         }
@@ -302,68 +256,42 @@ mod tests {
             );
         }
 
-        #[test]
-        fn deposit_accepts_the_money_limit() {
-            let mut account = Account::new(ClientId(42));
+        #[rstest]
+        #[case::unit_above_available_limit(Money::MAX.value(), Decimal::ZERO, Decimal::ONE)]
+        #[case::fraction_above_available_limit(Money::MAX.value(), Decimal::ZERO, Decimal::new(1, 4))]
+        #[case::maximum_deposit_exceeds_available_limit(Decimal::new(1, 4), Decimal::ZERO, Money::MAX.value())]
+        #[case::held_at_limit(Decimal::ZERO, Money::MAX.value(), Decimal::new(1, 4))]
+        #[case::combined_total_at_limit(Money::MAX.value() - Decimal::new(1, 4), Decimal::new(1, 4), Decimal::new(1, 4))]
+        fn deposits_exceeding_the_money_limit_leave_balances_and_history_unchanged(
+            #[case] available: Decimal,
+            #[case] held: Decimal,
+            #[case] amount: Decimal,
+        ) {
+            let mut account = Account::new(ClientId(42)).with_test_state(
+                Money::new(available).expect("valid available"),
+                Money::new(held).expect("valid held"),
+                AccountStatus::Active,
+                HashMap::new(),
+            );
 
-            account
-                .apply(deposit(1, Money::MAX.value()))
-                .expect("maximum balance is representable");
+            assert_eq!(
+                account.apply(deposit(1, amount)),
+                Err(DomainError::AmountOutOfRange)
+            );
 
             assert_eq!(
                 account,
                 Account {
                     client_id: ClientId(42),
                     balance: Balance::new(
-                        Money::new(Money::MAX.value()).expect("valid available"),
-                        Money::new(Decimal::ZERO).expect("valid held"),
+                        Money::new(available).expect("valid available"),
+                        Money::new(held).expect("valid held"),
                     )
                     .expect("valid balance"),
                     status: AccountStatus::Active,
-                    transactions: HashMap::from([(
-                        TransactionId(1),
-                        deposit_transaction(1, Money::MAX.value()),
-                    )]),
+                    transactions: HashMap::new(),
                 }
             );
-        }
-
-        #[test]
-        fn deposits_exceeding_the_money_limit_leave_balances_and_history_unchanged() {
-            let smallest = Decimal::new(1, 4);
-            for (available, held, amount) in [
-                (Money::MAX.value(), Decimal::ZERO, Decimal::ONE),
-                (Money::MAX.value(), Decimal::ZERO, smallest),
-                (smallest, Decimal::ZERO, Money::MAX.value()),
-                (Decimal::ZERO, Money::MAX.value(), smallest),
-                (Money::MAX.value() - smallest, smallest, smallest),
-            ] {
-                let mut account = Account::new(ClientId(42)).with_test_state(
-                    Money::new(available).expect("valid available"),
-                    Money::new(held).expect("valid held"),
-                    AccountStatus::Active,
-                    HashMap::new(),
-                );
-
-                assert_eq!(
-                    account.apply(deposit(1, amount)),
-                    Err(DomainError::AmountOutOfRange)
-                );
-
-                assert_eq!(
-                    account,
-                    Account {
-                        client_id: ClientId(42),
-                        balance: Balance::new(
-                            Money::new(available).expect("valid available"),
-                            Money::new(held).expect("valid held"),
-                        )
-                        .expect("valid balance"),
-                        status: AccountStatus::Active,
-                        transactions: HashMap::new(),
-                    }
-                );
-            }
         }
     }
 }

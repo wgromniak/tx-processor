@@ -182,8 +182,8 @@ impl Account {
         self.status
     }
 
-    pub fn transaction(&self, transaction_id: TransactionId) -> Option<&Transaction> {
-        self.transactions.get(&transaction_id)
+    pub fn transaction(&self, _transaction_id: TransactionId) -> Option<&Transaction> {
+        unimplemented!()
     }
 
     pub fn apply(&mut self, _command: PaymentCommand) -> Result<(), DomainError> {

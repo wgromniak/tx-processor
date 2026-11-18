@@ -28,6 +28,12 @@ impl Money {
         4,
     ));
 
+    /// Creates a monetary value with up to four decimal places.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the scale exceeds four decimal places or the value
+    /// falls outside the range from [`Self::MIN`] to [`Self::MAX`].
     pub fn new(value: Decimal) -> Result<Self, DomainError> {
         if value.scale() > 4 {
             return Err(DomainError::ExcessivePrecision);
@@ -38,6 +44,7 @@ impl Money {
         Ok(Self(value))
     }
 
+    #[must_use]
     pub fn value(self) -> Decimal {
         self.0
     }
@@ -51,6 +58,12 @@ impl Money {
 pub struct TransactionAmount(Money);
 
 impl TransactionAmount {
+    /// Creates a strictly positive transaction amount.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the value is zero or negative, or if [`Money::new`]
+    /// rejects its scale or magnitude.
     pub fn new(value: Decimal) -> Result<Self, DomainError> {
         let money = Money::new(value)?;
         if value <= Decimal::ZERO {
@@ -59,6 +72,7 @@ impl TransactionAmount {
         Ok(Self(money))
     }
 
+    #[must_use]
     pub fn money(self) -> Money {
         self.0
     }
@@ -87,14 +101,17 @@ impl Balance {
         })
     }
 
+    #[must_use]
     pub fn available(&self) -> Money {
         self.available
     }
 
+    #[must_use]
     pub fn held(&self) -> Money {
         self.held
     }
 
+    #[must_use]
     pub fn total(&self) -> Money {
         self.total
     }
@@ -165,6 +182,7 @@ pub enum PaymentCommand {
 }
 
 impl PaymentCommand {
+    #[must_use]
     pub fn client_id(&self) -> ClientId {
         match *self {
             Self::Deposit { client_id, .. }

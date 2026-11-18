@@ -119,29 +119,22 @@ pub enum TransactionState {
     ChargedBack,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Transaction {
-    id: TransactionId,
-    kind: TransactionKind,
-    amount: Money,
-    state: TransactionState,
+    pub id: TransactionId,
+    pub kind: TransactionKind,
+    pub amount: Money,
+    pub state: TransactionState,
 }
 
 impl Transaction {
-    pub fn id(&self) -> TransactionId {
-        unimplemented!()
-    }
-
-    pub fn kind(&self) -> TransactionKind {
-        unimplemented!()
-    }
-
-    pub fn amount(&self) -> Money {
-        unimplemented!()
-    }
-
-    pub fn state(&self) -> TransactionState {
-        unimplemented!()
+    pub(crate) fn new(id: TransactionId, kind: TransactionKind, amount: TransactionAmount) -> Self {
+        Self {
+            id,
+            kind,
+            amount: amount.money(),
+            state: TransactionState::Normal,
+        }
     }
 }
 
@@ -187,6 +180,8 @@ impl PaymentCommand {
 pub enum DomainError {
     ExcessivePrecision,
     NonPositiveAmount,
+    ClientMismatch,
+    DuplicateTransaction,
     AmountOutOfRange,
 }
 

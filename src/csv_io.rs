@@ -120,6 +120,8 @@ pub enum CsvError {
 #[cfg(test)]
 mod tests {
     mod from_account {
+        use std::collections::HashMap;
+
         use rust_decimal::Decimal;
 
         use crate::{
@@ -150,6 +152,7 @@ mod tests {
                 Money::new(Decimal::new(-1_234, 4)).expect("valid available balance"),
                 Money::new(Decimal::new(20_000, 4)).expect("valid held balance"),
                 AccountStatus::Locked,
+                HashMap::new(),
             );
 
             let row = AccountRow::from_account(&account);

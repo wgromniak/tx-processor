@@ -1,7 +1,7 @@
-use std::io::Read;
+use std::io::{Read, Write};
 
 use rust_decimal::Decimal;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::domain_types::{
     Account, ClientId, DomainError, PaymentCommand, TransactionAmount, TransactionId,
@@ -66,7 +66,24 @@ fn parse_amount(amount: &str) -> Result<TransactionAmount, CsvError> {
     TransactionAmount::new(value).map_err(CsvError::InvalidAmount)
 }
 
-#[derive(Debug)]
+pub fn write_accounts(
+    writer: impl Write,
+    rows: impl IntoIterator<Item = AccountRow>,
+) -> Result<(), csv::Error> {
+    let mut writer = csv::WriterBuilder::new()
+        .has_headers(false)
+        .from_writer(writer);
+    writer.write_record(["client", "available", "held", "total", "locked"])?;
+
+    for row in rows {
+        writer.serialize(row)?;
+    }
+
+    writer.flush()?;
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
 pub struct AccountRow {
     pub client: u16,
     pub available: String,
@@ -92,6 +109,66 @@ pub enum CsvError {
 
 #[cfg(test)]
 mod tests {
+    mod write_accounts {
+        use std::io::{self, Write};
+
+        use crate::csv_io::{AccountRow, write_accounts};
+
+        #[test]
+        fn writes_accounts_in_input_order_with_a_single_header() {
+            let rows = [
+                AccountRow {
+                    client: 9,
+                    available: "-0.1234".into(),
+                    held: "2.0000".into(),
+                    total: "1.8766".into(),
+                    locked: false,
+                },
+                AccountRow {
+                    client: 1,
+                    available: "3.1".into(),
+                    held: "0".into(),
+                    total: "3.1".into(),
+                    locked: true,
+                },
+            ];
+            let mut output = Vec::new();
+            write_accounts(&mut output, rows).expect("accounts should serialize");
+
+            assert_eq!(
+                output,
+                b"client,available,held,total,locked\n9,-0.1234,2.0000,1.8766,false\n1,3.1,0,3.1,true\n"
+            );
+        }
+
+        #[test]
+        fn writes_the_header_with_no_accounts() {
+            let mut output = Vec::new();
+            write_accounts(&mut output, []).expect("header should be written");
+
+            assert_eq!(output, b"client,available,held,total,locked\n");
+        }
+
+        struct FlushFails;
+
+        impl Write for FlushFails {
+            fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+                Ok(buffer.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Err(io::Error::other("flush failed"))
+            }
+        }
+
+        #[test]
+        fn propagates_flush_errors() {
+            let error = write_accounts(FlushFails, []).expect_err("flush error should be returned");
+
+            assert!(matches!(error.kind(), csv::ErrorKind::Io(_)));
+        }
+    }
+
     mod read_transactions {
         use std::io::{self, Cursor, Read};
 

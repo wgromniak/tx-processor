@@ -200,66 +200,87 @@ pub enum DomainError {
 
 #[cfg(test)]
 mod tests {
-    use super::{Account, AccountStatus, Balance, ClientId, DomainError, Money, TransactionAmount};
-    use rust_decimal::Decimal;
+    mod account {
+        use rust_decimal::Decimal;
 
-    #[test]
-    fn new_account_starts_active_with_a_zero_balance() {
-        let account = Account::new(ClientId(42));
+        use crate::domain_types::{Account, AccountStatus, ClientId};
 
-        assert_eq!(account.client_id(), ClientId(42));
-        assert_eq!(account.status(), AccountStatus::Active);
-        assert_eq!(account.balance().available().value(), Decimal::ZERO);
-        assert_eq!(account.balance().held().value(), Decimal::ZERO);
-        assert_eq!(account.balance().total().value(), Decimal::ZERO);
-    }
+        #[test]
+        fn new_account_starts_active_with_a_zero_balance() {
+            let account = Account::new(ClientId(42));
 
-    #[test]
-    fn balance_total_sums_available_and_held() {
-        let balance = Balance {
-            available: Money::new(Decimal::new(-1_234, 4)).expect("valid available balance"),
-            held: Money::new(Decimal::new(2, 0)).expect("valid held balance"),
-        };
-
-        assert_eq!(balance.total().value(), Decimal::new(18_766, 4));
-    }
-
-    #[test]
-    fn money_preserves_signed_values_at_supported_precision() {
-        for value in [Decimal::ZERO, Decimal::new(1, 4), Decimal::new(-1234, 4)] {
-            let stored = Money::new(value).expect("money should support this value");
-            assert_eq!(stored.value(), value);
-            assert_eq!(stored.value().scale(), value.scale());
+            assert_eq!(account.client_id(), ClientId(42));
+            assert_eq!(account.status(), AccountStatus::Active);
+            assert_eq!(account.balance().available().value(), Decimal::ZERO);
+            assert_eq!(account.balance().held().value(), Decimal::ZERO);
+            assert_eq!(account.balance().total().value(), Decimal::ZERO);
         }
     }
 
-    #[test]
-    fn money_rejects_more_than_four_decimal_places() {
-        assert_eq!(
-            Money::new(Decimal::new(12_340, 5)),
-            Err(DomainError::ExcessivePrecision)
-        );
+    mod balance {
+        use rust_decimal::Decimal;
+
+        use crate::domain_types::{Balance, Money};
+
+        #[test]
+        fn balance_total_sums_available_and_held() {
+            let balance = Balance {
+                available: Money::new(Decimal::new(-1_234, 4)).expect("valid available balance"),
+                held: Money::new(Decimal::new(2, 0)).expect("valid held balance"),
+            };
+
+            assert_eq!(balance.total().value(), Decimal::new(18_766, 4));
+        }
     }
 
-    #[test]
-    fn transaction_amount_requires_positive_money() {
-        let value = Decimal::new(1, 4);
-        let amount = TransactionAmount::new(value).expect("positive money should be accepted");
-        assert_eq!(amount.money().value(), value);
+    mod money {
+        use rust_decimal::Decimal;
 
-        for value in [Decimal::ZERO, Decimal::new(-1, 4)] {
+        use crate::domain_types::{DomainError, Money};
+
+        #[test]
+        fn money_preserves_signed_values_at_supported_precision() {
+            for value in [Decimal::ZERO, Decimal::new(1, 4), Decimal::new(-1234, 4)] {
+                let stored = Money::new(value).expect("money should support this value");
+                assert_eq!(stored.value(), value);
+                assert_eq!(stored.value().scale(), value.scale());
+            }
+        }
+
+        #[test]
+        fn money_rejects_more_than_four_decimal_places() {
             assert_eq!(
-                TransactionAmount::new(value),
-                Err(DomainError::NonPositiveAmount)
+                Money::new(Decimal::new(12_340, 5)),
+                Err(DomainError::ExcessivePrecision)
             );
         }
     }
 
-    #[test]
-    fn transaction_amount_enforces_money_precision() {
-        assert_eq!(
-            TransactionAmount::new(Decimal::new(1, 5)),
-            Err(DomainError::ExcessivePrecision)
-        );
+    mod transaction_amount {
+        use rust_decimal::Decimal;
+
+        use crate::domain_types::{DomainError, TransactionAmount};
+
+        #[test]
+        fn transaction_amount_requires_positive_money() {
+            let value = Decimal::new(1, 4);
+            let amount = TransactionAmount::new(value).expect("positive money should be accepted");
+            assert_eq!(amount.money().value(), value);
+
+            for value in [Decimal::ZERO, Decimal::new(-1, 4)] {
+                assert_eq!(
+                    TransactionAmount::new(value),
+                    Err(DomainError::NonPositiveAmount)
+                );
+            }
+        }
+
+        #[test]
+        fn transaction_amount_enforces_money_precision() {
+            assert_eq!(
+                TransactionAmount::new(Decimal::new(1, 5)),
+                Err(DomainError::ExcessivePrecision)
+            );
+        }
     }
 }

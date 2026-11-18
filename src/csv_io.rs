@@ -86,7 +86,7 @@ pub fn write_accounts(
     Ok(())
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct AccountRow {
     pub client: u16,
     pub available: String,
@@ -96,15 +96,15 @@ pub struct AccountRow {
 }
 
 impl AccountRow {
-    pub fn from_account(account: &Account) -> Self {
+    pub fn from_account(account: &Account) -> Result<Self, DomainError> {
         let balance = account.balance();
-        Self {
+        Ok(Self {
             client: account.client_id().0,
             available: balance.available().value().to_string(),
             held: balance.held().value().to_string(),
-            total: balance.total().value().to_string(),
+            total: balance.total()?.value().to_string(),
             locked: account.status() == AccountStatus::Locked,
-        }
+        })
     }
 }
 
@@ -125,18 +125,23 @@ mod tests {
         use crate::{
             account::Account,
             csv_io::AccountRow,
-            domain_types::{AccountStatus, ClientId, Money},
+            domain_types::{AccountStatus, ClientId, DomainError, Money},
         };
 
         #[test]
         fn maps_a_new_account_to_an_unlocked_row() {
             let row = AccountRow::from_account(&Account::new(ClientId(42)));
 
-            assert_eq!(row.client, 42);
-            assert_eq!(row.available, "0");
-            assert_eq!(row.held, "0");
-            assert_eq!(row.total, "0");
-            assert!(!row.locked);
+            assert_eq!(
+                row,
+                Ok(AccountRow {
+                    client: 42,
+                    available: "0".into(),
+                    held: "0".into(),
+                    total: "0".into(),
+                    locked: false,
+                })
+            );
         }
 
         #[test]
@@ -149,11 +154,30 @@ mod tests {
 
             let row = AccountRow::from_account(&account);
 
-            assert_eq!(row.client, 7);
-            assert_eq!(row.available, "-0.1234");
-            assert_eq!(row.held, "2.0000");
-            assert_eq!(row.total, "1.8766");
-            assert!(row.locked);
+            assert_eq!(
+                row,
+                Ok(AccountRow {
+                    client: 7,
+                    available: "-0.1234".into(),
+                    held: "2.0000".into(),
+                    total: "1.8766".into(),
+                    locked: true,
+                })
+            );
+        }
+
+        #[test]
+        fn propagates_an_out_of_range_account_total() {
+            let account = Account::new(ClientId(42)).with_test_state(
+                Money::MAX,
+                Money::new(Decimal::new(1, 4)).expect("valid held"),
+                AccountStatus::Active,
+            );
+
+            assert_eq!(
+                AccountRow::from_account(&account),
+                Err(DomainError::AmountOutOfRange)
+            );
         }
     }
 

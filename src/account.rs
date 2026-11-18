@@ -77,6 +77,9 @@ mod tests {
         assert_eq!(account.status(), AccountStatus::Active);
         assert_eq!(account.balance().available().value(), Decimal::ZERO);
         assert_eq!(account.balance().held().value(), Decimal::ZERO);
-        assert_eq!(account.balance().total().value(), Decimal::ZERO);
+        assert_eq!(
+            account.balance().total().expect("valid total").value(),
+            Decimal::ZERO
+        );
     }
 }

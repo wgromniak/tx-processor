@@ -123,16 +123,6 @@ pub enum TransactionState {
     ChargedBack,
 }
 
-/// Transaction fields are read-only outside this module; state changes must use
-/// the checked transition methods.
-///
-/// ```compile_fail
-/// use tx_processor::domain_types::{Transaction, TransactionState};
-///
-/// fn overwrite_state(transaction: &mut Transaction) {
-///     transaction.state = TransactionState::ChargedBack;
-/// }
-/// ```
 #[derive(Debug, PartialEq, Eq)]
 pub struct Transaction {
     id: TransactionId,

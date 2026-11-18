@@ -39,8 +39,6 @@ impl PaymentProcessor {
     }
 
     pub fn accounts(&self) -> Vec<&Account> {
-        let mut accounts: Vec<_> = self.accounts.values().collect();
-        accounts.sort_unstable_by_key(|account| account.client_id().0);
-        accounts
+        self.accounts.values().collect()
     }
 }

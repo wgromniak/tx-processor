@@ -5,59 +5,40 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::{
     account::Account,
-    payment_processor::PaymentProcessor,
     transaction::{TransactionAmount, TransactionId},
     types::{AccountStatus, ClientId, DomainError, PaymentCommand},
 };
 
+/// Streams validated commands, logging and skipping invalid CSV rows or commands.
+/// Header errors are returned immediately and I/O errors during iteration are yielded.
 pub fn read_transactions(
     reader: impl Read,
-) -> Result<impl Iterator<Item = Result<TransactionRow, csv::Error>>, csv::Error> {
+) -> Result<impl Iterator<Item = Result<PaymentCommand, csv::Error>>, csv::Error> {
     let mut reader = csv::ReaderBuilder::new()
         .trim(csv::Trim::All)
         .from_reader(reader);
     reader.headers()?;
 
-    Ok(reader.into_deserialize())
-}
-
-pub fn process_transactions(
-    rows: impl Iterator<Item = Result<TransactionRow, csv::Error>>,
-    output: impl Write,
-) -> Result<(), String> {
-    let mut processor = PaymentProcessor::new();
-
-    for row in rows {
-        let row = match row {
-            Ok(row) => row,
-            Err(error) => {
-                let message = format!("Could not read transaction: {error}");
-                if error.is_io_error() {
-                    return Err(message);
+    Ok(reader
+        .into_deserialize::<TransactionRow>()
+        .filter_map(|row| {
+            let row = match row {
+                Ok(row) => row,
+                Err(error) if error.is_io_error() => return Some(Err(error)),
+                Err(error) => {
+                    eprintln!("Could not read transaction: {error}");
+                    return None;
                 }
-                eprintln!("{message}");
-                continue;
+            };
+
+            match row.into_command() {
+                Ok(command) => Some(Ok(command)),
+                Err(error) => {
+                    eprintln!("Invalid transaction: {error:?}");
+                    None
+                }
             }
-        };
-
-        let command = match row.into_command() {
-            Ok(command) => command,
-            Err(error) => {
-                eprintln!("Invalid transaction: {error:?}");
-                continue;
-            }
-        };
-
-        processor
-            .process(command)
-            .map_err(|error| format!("Could not process transaction: {error:?}"))?;
-    }
-
-    let accounts = processor
-        .accounts()
-        .into_iter()
-        .map(AccountRow::from_account);
-    write_accounts(output, accounts).map_err(|error| format!("Could not write accounts: {error}"))
+        }))
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -158,16 +139,6 @@ pub enum CsvError {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{self, Read};
-
-    struct FailingReader;
-
-    impl Read for FailingReader {
-        fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
-            Err(io::Error::other("input read failed"))
-        }
-    }
-
     mod from_account {
         use std::collections::HashMap;
 
@@ -273,13 +244,26 @@ mod tests {
     }
 
     mod read_transactions {
-        use std::io::Cursor;
+        use std::io::{self, Cursor, Read};
 
         use rstest::rstest;
+        use rust_decimal::Decimal;
 
-        use crate::csv_io::{TransactionRow, read_transactions};
+        use crate::{
+            csv_io::read_transactions,
+            domain::{
+                transaction::{TransactionAmount, TransactionId},
+                types::{ClientId, PaymentCommand},
+            },
+        };
 
-        use super::FailingReader;
+        struct FailingReader;
+
+        impl Read for FailingReader {
+            fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::other("input read failed"))
+            }
+        }
 
         #[test]
         fn reads_mixed_transactions_in_input_order() {
@@ -292,91 +276,105 @@ resolve,2,9,
 chargeback,2,9,
 ";
 
-            let rows = read_transactions(input.as_bytes())
+            let commands = read_transactions(input.as_bytes())
                 .expect("headers should be readable")
                 .collect::<Result<Vec<_>, _>>()
-                .expect("rows should deserialize");
+                .expect("commands should be readable");
 
             assert_eq!(
-                rows,
+                commands,
                 [
-                    TransactionRow {
-                        r#type: "deposit".into(),
-                        client: 2,
-                        tx: 9,
-                        amount: Some("12.3400".into()),
+                    PaymentCommand::Deposit {
+                        client_id: ClientId(2),
+                        transaction_id: TransactionId(9),
+                        amount: TransactionAmount::new(Decimal::new(123_400, 4))
+                            .expect("valid deposit amount"),
                     },
-                    TransactionRow {
-                        r#type: "withdrawal".into(),
-                        client: 1,
-                        tx: 3,
-                        amount: Some("0.5".into()),
+                    PaymentCommand::Withdrawal {
+                        client_id: ClientId(1),
+                        transaction_id: TransactionId(3),
+                        amount: TransactionAmount::new(Decimal::new(5, 1))
+                            .expect("valid withdrawal amount"),
                     },
-                    TransactionRow {
-                        r#type: "dispute".into(),
-                        client: 2,
-                        tx: 9,
-                        amount: None,
+                    PaymentCommand::Dispute {
+                        client_id: ClientId(2),
+                        transaction_id: TransactionId(9),
                     },
-                    TransactionRow {
-                        r#type: "resolve".into(),
-                        client: 2,
-                        tx: 9,
-                        amount: None,
+                    PaymentCommand::Resolve {
+                        client_id: ClientId(2),
+                        transaction_id: TransactionId(9),
                     },
-                    TransactionRow {
-                        r#type: "chargeback".into(),
-                        client: 2,
-                        tx: 9,
-                        amount: None,
+                    PaymentCommand::Chargeback {
+                        client_id: ClientId(2),
+                        transaction_id: TransactionId(9),
                     },
                 ]
             );
         }
 
         #[test]
-        fn trims_headers_and_fields() {
+        fn trims_headers_and_fields_and_preserves_amount_scale() {
             let input = " type , client , tx , amount \n deposit , 7 , 42 , 1.2300 \n";
 
-            let rows = read_transactions(input.as_bytes())
+            let commands = read_transactions(input.as_bytes())
                 .expect("headers should be readable")
                 .collect::<Result<Vec<_>, _>>()
-                .expect("rows should deserialize");
+                .expect("commands should be readable");
+
+            assert!(
+                matches!(
+                    commands.as_slice(),
+                    [PaymentCommand::Deposit {
+                        client_id: ClientId(7),
+                        transaction_id: TransactionId(42),
+                        amount,
+                    }] if amount.money().value().to_string() == "1.2300"
+                ),
+                "unexpected commands: {commands:?}"
+            );
+        }
+
+        #[rstest]
+        #[case::empty("")]
+        #[case::whitespace("   ")]
+        fn accepts_blank_amounts_for_disputes(#[case] amount: &str) {
+            let input = format!("type,client,tx,amount\ndispute,1,2,{amount}\n");
+            let commands = read_transactions(input.as_bytes())
+                .expect("headers should be readable")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("commands should be readable");
 
             assert_eq!(
-                rows,
-                [TransactionRow {
-                    r#type: "deposit".into(),
-                    client: 7,
-                    tx: 42,
-                    amount: Some("1.2300".into()),
+                commands,
+                [PaymentCommand::Dispute {
+                    client_id: ClientId(1),
+                    transaction_id: TransactionId(2),
                 }]
             );
         }
 
         #[rstest]
-        #[case::empty("", None)]
-        #[case::whitespace("   ", None)]
-        #[case::trailing_zeroes("1.2300", Some("1.2300"))]
-        fn preserves_amount_text_and_treats_blank_amounts_as_none(
-            #[case] amount: &str,
-            #[case] expected_amount: Option<&str>,
-        ) {
-            let input = format!("type,client,tx,amount\ndeposit,1,2,{amount}\n");
-            let row = read_transactions(input.as_bytes())
+        #[case::malformed_csv("deposit,invalid-client,2,1")]
+        #[case::invalid_command("deposit,1,2,")]
+        fn skips_invalid_transactions_and_keeps_valid_commands_in_order(#[case] row: &str) {
+            let input = format!("type,client,tx,amount\ndispute,1,1,\n{row}\nresolve,1,1,\n");
+            let commands = read_transactions(input.as_bytes())
                 .expect("headers should be readable")
-                .next()
-                .expect("input should contain a row")
-                .expect("row should deserialize");
+                .collect::<Result<Vec<_>, _>>()
+                .expect("commands should be readable");
 
             assert_eq!(
-                row,
-                TransactionRow {
-                    r#type: "deposit".into(),
-                    client: 1,
-                    tx: 2,
-                    amount: expected_amount.map(str::to_owned),
-                }
+                commands,
+                [
+                    PaymentCommand::Dispute {
+                        client_id: ClientId(1),
+                        transaction_id: TransactionId(1),
+                    },
+                    PaymentCommand::Resolve {
+                        client_id: ClientId(1),
+                        transaction_id: TransactionId(1),
+                    },
+                ]
             );
         }
 
@@ -390,7 +388,7 @@ chargeback,2,9,
         }
 
         #[test]
-        fn yields_the_first_row_without_reading_the_entire_input() {
+        fn yields_the_first_command_without_reading_the_entire_input() {
             let input = format!(
                 "type,client,tx,amount\n{}",
                 "deposit,1,2,1\n".repeat(100_000)
@@ -400,69 +398,49 @@ chargeback,2,9,
             let mut source = Cursor::new(input);
 
             {
-                let mut rows = read_transactions(&mut source).expect("headers should be readable");
-                let row = rows
+                let mut commands =
+                    read_transactions(&mut source).expect("headers should be readable");
+                let command = commands
                     .next()
-                    .expect("input should contain a row")
-                    .expect("row should deserialize");
+                    .expect("input should contain a command")
+                    .expect("first command should be readable");
                 assert_eq!(
-                    row,
-                    TransactionRow {
-                        r#type: "deposit".into(),
-                        client: 1,
-                        tx: 2,
-                        amount: Some("1".into()),
+                    command,
+                    PaymentCommand::Deposit {
+                        client_id: ClientId(1),
+                        transaction_id: TransactionId(2),
+                        amount: TransactionAmount::new(Decimal::ONE).expect("valid deposit amount"),
                     }
                 );
             }
 
             assert!(source.position() < input_len);
         }
-    }
-
-    mod process_transactions {
-        use std::io::Read;
-
-        use crate::csv_io::{process_transactions, read_transactions};
-
-        use super::FailingReader;
 
         #[test]
-        fn fails_without_writing_accounts_after_input_read_error() {
+        fn yields_input_read_error_after_valid_command() {
             let input = b"type,client,tx,amount\ndeposit,1,1,1\n";
-            let rows = read_transactions(input.as_slice().chain(FailingReader))
+            let mut commands = read_transactions(input.as_slice().chain(FailingReader))
                 .expect("headers should be readable");
-            let mut output = Vec::new();
-
-            let result = process_transactions(rows, &mut output);
-
-            assert_eq!(output, b"");
             assert_eq!(
-                result,
-                Err("Could not read transaction: input read failed".into())
+                commands
+                    .next()
+                    .expect("input should contain a command")
+                    .expect("first command should be readable"),
+                PaymentCommand::Deposit {
+                    client_id: ClientId(1),
+                    transaction_id: TransactionId(1),
+                    amount: TransactionAmount::new(Decimal::ONE).expect("valid deposit amount"),
+                }
             );
-        }
-    }
+            let error = commands
+                .next()
+                .expect("iterator should yield the read error")
+                .expect_err("reader should fail after the first command");
 
-    mod into_command {
-        use rstest::rstest;
-        use rust_decimal::Decimal;
-
-        use crate::{
-            csv_io::{CsvError, TransactionRow, read_transactions},
-            domain::{
-                transaction::{TransactionAmount, TransactionId},
-                types::{ClientId, DomainError, PaymentCommand},
-            },
-        };
-
-        fn transaction_row(kind: &str, amount: Option<&str>) -> TransactionRow {
-            TransactionRow {
-                r#type: kind.into(),
-                client: 1,
-                tx: 2,
-                amount: amount.map(str::to_owned),
-            }
+            assert!(error.is_io_error());
+            assert_eq!(error.to_string(), "input read failed");
+            assert!(commands.next().is_none());
         }
 
         #[rstest]
@@ -513,12 +491,28 @@ chargeback,2,9,
             let command = read_transactions(input.as_bytes())
                 .expect("headers should be readable")
                 .next()
-                .expect("input should contain a row")
-                .expect("row should deserialize")
-                .into_command()
-                .expect("row should convert to a payment command");
+                .expect("input should contain a command")
+                .expect("first command should be readable");
 
             assert_eq!(command, expected);
+        }
+    }
+
+    mod into_command {
+        use rstest::rstest;
+
+        use crate::{
+            csv_io::{CsvError, TransactionRow},
+            domain::types::DomainError,
+        };
+
+        fn transaction_row(kind: &str, amount: Option<&str>) -> TransactionRow {
+            TransactionRow {
+                r#type: kind.into(),
+                client: 1,
+                tx: 2,
+                amount: amount.map(str::to_owned),
+            }
         }
 
         #[rstest]

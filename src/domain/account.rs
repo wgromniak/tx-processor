@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::domain::{
     transaction::{Transaction, TransactionAmount, TransactionId, TransactionKind},
@@ -13,7 +13,8 @@ pub struct Account {
     client_id: ClientId,
     balance: Balance,
     status: AccountStatus,
-    transactions: HashMap<TransactionId, Transaction>,
+    deposits: HashMap<TransactionId, Transaction>,
+    withdrawal_ids: HashSet<TransactionId>,
 }
 
 impl Account {
@@ -22,7 +23,8 @@ impl Account {
             client_id,
             balance: Balance::ZERO,
             status: AccountStatus::Active,
-            transactions: HashMap::new(),
+            deposits: HashMap::new(),
+            withdrawal_ids: HashSet::new(),
         }
     }
 
@@ -60,19 +62,23 @@ impl Account {
         }
     }
 
+    fn contains_transaction(&self, transaction_id: TransactionId) -> bool {
+        self.deposits.contains_key(&transaction_id) || self.withdrawal_ids.contains(&transaction_id)
+    }
+
     fn deposit(
         &mut self,
         transaction_id: TransactionId,
         amount: TransactionAmount,
     ) -> Result<(), DomainError> {
-        if self.transactions.contains_key(&transaction_id) {
+        if self.contains_transaction(transaction_id) {
             return Err(DomainError::DuplicateTransaction);
         }
 
         let available = self.balance.available().checked_add(amount.money())?;
 
         self.balance = Balance::new(available, self.balance.held())?;
-        self.transactions.insert(
+        self.deposits.insert(
             transaction_id,
             Transaction::new(transaction_id, TransactionKind::Deposit, amount),
         );
@@ -84,7 +90,7 @@ impl Account {
         transaction_id: TransactionId,
         amount: TransactionAmount,
     ) -> Result<(), DomainError> {
-        if self.transactions.contains_key(&transaction_id) {
+        if self.contains_transaction(transaction_id) {
             return Err(DomainError::DuplicateTransaction);
         }
         if self.status == AccountStatus::Locked
@@ -96,15 +102,12 @@ impl Account {
         let available = self.balance.available().checked_sub(amount.money())?;
 
         self.balance = Balance::new(available, self.balance.held())?;
-        self.transactions.insert(
-            transaction_id,
-            Transaction::new(transaction_id, TransactionKind::Withdrawal, amount),
-        );
+        self.withdrawal_ids.insert(transaction_id);
         Ok(())
     }
 
     fn dispute(&mut self, transaction_id: TransactionId) -> Result<(), DomainError> {
-        let Some(transaction) = self.transactions.get_mut(&transaction_id) else {
+        let Some(transaction) = self.deposits.get_mut(&transaction_id) else {
             return Ok(());
         };
         if !transaction.can_be_disputed() {
@@ -127,7 +130,7 @@ impl Account {
     }
 
     fn resolve(&mut self, transaction_id: TransactionId) -> Result<(), DomainError> {
-        let Some(transaction) = self.transactions.get_mut(&transaction_id) else {
+        let Some(transaction) = self.deposits.get_mut(&transaction_id) else {
             return Ok(());
         };
         if !transaction.is_disputed() {
@@ -150,7 +153,7 @@ impl Account {
     }
 
     fn chargeback(&mut self, transaction_id: TransactionId) -> Result<(), DomainError> {
-        let Some(transaction) = self.transactions.get_mut(&transaction_id) else {
+        let Some(transaction) = self.deposits.get_mut(&transaction_id) else {
             return Ok(());
         };
         if !transaction.is_disputed() {
@@ -175,18 +178,18 @@ impl Account {
         available: Money,
         held: Money,
         status: AccountStatus,
-        transactions: HashMap<TransactionId, Transaction>,
+        deposits: HashMap<TransactionId, Transaction>,
     ) -> Self {
         self.balance = Balance::new(available, held).expect("valid test balance");
         self.status = status;
-        self.transactions = transactions;
+        self.deposits = deposits;
         self
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     use rstest::rstest;
     use rust_decimal::Decimal;
@@ -254,7 +257,8 @@ mod tests {
                 client_id: ClientId(42),
                 balance: Balance::ZERO,
                 status: AccountStatus::Active,
-                transactions: HashMap::new(),
+                deposits: HashMap::new(),
+                withdrawal_ids: HashSet::new(),
             }
         );
     }
@@ -345,10 +349,11 @@ mod tests {
                     )
                     .expect("valid balance"),
                     status,
-                    transactions: deposits
+                    deposits: deposits
                         .iter()
                         .map(|&(id, amount)| (TransactionId(id), deposit_transaction(id, amount)))
                         .collect(),
+                    withdrawal_ids: HashSet::new(),
                 }
             );
         }
@@ -375,10 +380,11 @@ mod tests {
                     )
                     .expect("valid balance"),
                     status: AccountStatus::Active,
-                    transactions: HashMap::from([(
+                    deposits: HashMap::from([(
                         TransactionId(1),
                         deposit_transaction(1, Decimal::ONE),
                     )]),
+                    withdrawal_ids: HashSet::new(),
                 }
             );
         }
@@ -416,7 +422,8 @@ mod tests {
                     )
                     .expect("valid balance"),
                     status: AccountStatus::Active,
-                    transactions: HashMap::new(),
+                    deposits: HashMap::new(),
+                    withdrawal_ids: HashSet::new(),
                 }
             );
         }
@@ -462,14 +469,8 @@ mod tests {
                     )
                     .expect("valid balance"),
                     status: AccountStatus::Active,
-                    transactions: HashMap::from([(
-                        TransactionId(0),
-                        Transaction::new(
-                            TransactionId(0),
-                            TransactionKind::Withdrawal,
-                            TransactionAmount::new(amount).expect("valid amount"),
-                        ),
-                    )]),
+                    deposits: HashMap::new(),
+                    withdrawal_ids: HashSet::from([TransactionId(0)]),
                 }
             );
         }
@@ -500,7 +501,8 @@ mod tests {
                     client_id: ClientId(42),
                     balance,
                     status,
-                    transactions: HashMap::new(),
+                    deposits: HashMap::new(),
+                    withdrawal_ids: HashSet::new(),
                 }
             );
         }
@@ -536,14 +538,6 @@ mod tests {
             .expect("valid balance")
         }
 
-        fn withdrawal_transaction(transaction_id: u32, amount: Decimal) -> Transaction {
-            Transaction::new(
-                TransactionId(transaction_id),
-                TransactionKind::Withdrawal,
-                TransactionAmount::new(amount).expect("valid withdrawal amount"),
-            )
-        }
-
         #[test]
         fn disputes_and_resolutions_preserve_total_and_allow_redisputes() {
             let mut account = Account::new(ClientId(42));
@@ -571,7 +565,7 @@ mod tests {
                         client_id: ClientId(42),
                         balance: test_balance(Decimal::new(available, 4), Decimal::new(held, 4)),
                         status: Active,
-                        transactions: HashMap::from([
+                        deposits: HashMap::from([
                             (
                                 TransactionId(1),
                                 deposit_transaction(1, Decimal::new(12_345, 4))
@@ -582,8 +576,8 @@ mod tests {
                                 deposit_transaction(2, Decimal::new(1, 4))
                                     .with_test_state(second_state)
                             ),
-                            (TransactionId(3), withdrawal_transaction(3, Decimal::ONE)),
                         ]),
+                        withdrawal_ids: HashSet::from([TransactionId(3)]),
                     }
                 );
             }
@@ -607,7 +601,7 @@ mod tests {
                     client_id: ClientId(42),
                     balance: test_balance(Decimal::ZERO, Decimal::ONE),
                     status: Locked,
-                    transactions: HashMap::from([
+                    deposits: HashMap::from([
                         (
                             TransactionId(1),
                             deposit_transaction(1, Decimal::new(2, 0)).with_test_state(ChargedBack)
@@ -617,6 +611,7 @@ mod tests {
                             deposit_transaction(2, Decimal::ONE).with_test_state(Disputed)
                         ),
                     ]),
+                    withdrawal_ids: HashSet::new(),
                 }
             );
 
@@ -634,7 +629,7 @@ mod tests {
                         client_id: ClientId(42),
                         balance: test_balance(Decimal::new(available, 0), Decimal::new(held, 0)),
                         status: Locked,
-                        transactions: HashMap::from([
+                        deposits: HashMap::from([
                             (
                                 TransactionId(1),
                                 deposit_transaction(1, Decimal::new(2, 0))
@@ -646,6 +641,7 @@ mod tests {
                             ),
                             (TransactionId(3), deposit_transaction(3, Decimal::ONE)),
                         ]),
+                        withdrawal_ids: HashSet::new(),
                     }
                 );
             }
@@ -688,13 +684,11 @@ mod tests {
                         client_id: ClientId(42),
                         balance: test_balance(available, held),
                         status,
-                        transactions: HashMap::from([
-                            (
-                                TransactionId(u32::MAX),
-                                deposit_transaction(u32::MAX, amount).with_test_state(state)
-                            ),
-                            (TransactionId(0), withdrawal_transaction(0, amount)),
-                        ]),
+                        deposits: HashMap::from([(
+                            TransactionId(u32::MAX),
+                            deposit_transaction(u32::MAX, amount).with_test_state(state),
+                        )]),
+                        withdrawal_ids: HashSet::from([TransactionId(0)]),
                     }
                 );
             }
@@ -721,35 +715,20 @@ mod tests {
             #[case] command: PaymentCommand,
         ) {
             let balance = test_balance(Decimal::new(available, 0), Decimal::new(held, 0));
-            let mut account = Account {
+            let expected_account = || Account {
                 client_id: ClientId(42),
                 balance,
                 status,
-                transactions: HashMap::from([
-                    (
-                        TransactionId(1),
-                        deposit_transaction(1, Decimal::new(2, 0)).with_test_state(state),
-                    ),
-                    (TransactionId(2), withdrawal_transaction(2, Decimal::ONE)),
-                ]),
+                deposits: HashMap::from([(
+                    TransactionId(1),
+                    deposit_transaction(1, Decimal::new(2, 0)).with_test_state(state),
+                )]),
+                withdrawal_ids: HashSet::from([TransactionId(2)]),
             };
+            let mut account = expected_account();
 
             assert_eq!(account.apply(command), Ok(()));
-            assert_eq!(
-                account,
-                Account {
-                    client_id: ClientId(42),
-                    balance,
-                    status,
-                    transactions: HashMap::from([
-                        (
-                            TransactionId(1),
-                            deposit_transaction(1, Decimal::new(2, 0)).with_test_state(state)
-                        ),
-                        (TransactionId(2), withdrawal_transaction(2, Decimal::ONE)),
-                    ]),
-                }
-            );
+            assert_eq!(account, expected_account());
         }
 
         #[rstest]
@@ -776,10 +755,11 @@ mod tests {
                     client_id: ClientId(42),
                     balance: Balance::new(available, held).expect("valid balance"),
                     status: Active,
-                    transactions: HashMap::from([(
+                    deposits: HashMap::from([(
                         TransactionId(1),
                         deposit_transaction(1, Decimal::new(1, 4)),
                     )]),
+                    withdrawal_ids: HashSet::new(),
                 }
             );
         }

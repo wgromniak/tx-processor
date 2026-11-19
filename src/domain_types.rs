@@ -498,20 +498,22 @@ mod tests {
     }
 
     mod transaction_amount {
-        use rstest::rstest;
         use rust_decimal::Decimal;
 
         use crate::domain_types::{DomainError, Money, TransactionAmount};
 
-        #[rstest]
-        #[case::positive(Decimal::new(1, 4), Ok(TransactionAmount(Money(Decimal::new(1, 4)))))]
-        #[case::zero(Decimal::ZERO, Err(DomainError::NonPositiveAmount))]
-        #[case::negative(Decimal::new(-1, 4), Err(DomainError::NonPositiveAmount))]
-        fn transaction_amount_requires_positive_money(
-            #[case] value: Decimal,
-            #[case] expected: Result<TransactionAmount, DomainError>,
-        ) {
-            assert_eq!(TransactionAmount::new(value), expected);
+        #[test]
+        fn transaction_amount_requires_positive_money() {
+            let value = Decimal::new(1, 4);
+            let amount = TransactionAmount::new(value).expect("positive money should be accepted");
+            assert_eq!(amount, TransactionAmount(Money(value)));
+
+            for value in [Decimal::ZERO, Decimal::new(-1, 4)] {
+                assert_eq!(
+                    TransactionAmount::new(value),
+                    Err(DomainError::NonPositiveAmount)
+                );
+            }
         }
 
         #[test]
@@ -522,14 +524,16 @@ mod tests {
             );
         }
 
-        #[rstest]
-        #[case::at_limit(Money::MAX.value(), Ok(TransactionAmount(Money::MAX)))]
-        #[case::above_limit(Money::MAX.value() + Decimal::new(1, 4), Err(DomainError::AmountOutOfRange))]
-        fn transaction_amount_enforces_the_money_limit(
-            #[case] value: Decimal,
-            #[case] expected: Result<TransactionAmount, DomainError>,
-        ) {
-            assert_eq!(TransactionAmount::new(value), expected);
+        #[test]
+        fn transaction_amount_enforces_the_money_limit() {
+            assert_eq!(
+                TransactionAmount::new(Money::MAX.value()),
+                Ok(TransactionAmount(Money::MAX))
+            );
+            assert_eq!(
+                TransactionAmount::new(Money::MAX.value() + Decimal::new(1, 4)),
+                Err(DomainError::AmountOutOfRange)
+            );
         }
     }
 }

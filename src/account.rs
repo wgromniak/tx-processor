@@ -212,12 +212,15 @@ mod tests {
         }
     }
 
-    fn test_balance(available: Decimal, held: Decimal) -> Balance {
-        Balance::new(
-            Money::new(available).expect("valid available"),
-            Money::new(held).expect("valid held"),
-        )
-        .expect("valid balance")
+    fn assert_balance(account: &Account, available: Decimal, held: Decimal) {
+        assert_eq!(
+            account.balance,
+            Balance::new(
+                Money::new(available).expect("valid available"),
+                Money::new(held).expect("valid held"),
+            )
+            .expect("valid balance"),
+        );
     }
 
     fn deposit_transaction(transaction_id: u32, amount: Decimal) -> Transaction {
@@ -225,14 +228,6 @@ mod tests {
             TransactionId(transaction_id),
             TransactionKind::Deposit,
             TransactionAmount::new(amount).expect("valid deposit amount"),
-        )
-    }
-
-    fn withdrawal_transaction(transaction_id: u32, amount: Decimal) -> Transaction {
-        Transaction::new(
-            TransactionId(transaction_id),
-            TransactionKind::Withdrawal,
-            TransactionAmount::new(amount).expect("valid withdrawal amount"),
         )
     }
 
@@ -422,17 +417,18 @@ mod tests {
                 .apply(withdrawal(0, amount))
                 .expect("withdrawal succeeds");
 
+            assert_balance(&account, available - amount, Decimal::ONE);
+            assert_eq!(account.status, AccountStatus::Active);
             assert_eq!(
-                account,
-                Account {
-                    client_id: ClientId(42),
-                    balance: test_balance(available - amount, Decimal::ONE),
-                    status: AccountStatus::Active,
-                    transactions: HashMap::from([(
+                account.transactions,
+                HashMap::from([(
+                    TransactionId(0),
+                    Transaction::new(
                         TransactionId(0),
-                        withdrawal_transaction(0, amount),
-                    )]),
-                }
+                        TransactionKind::Withdrawal,
+                        TransactionAmount::new(amount).expect("valid amount"),
+                    ),
+                )])
             );
         }
 
@@ -479,59 +475,28 @@ mod tests {
         }
 
         #[rstest]
-        #[case::deposit_then_withdrawal(
-            deposit(1, Decimal::ONE),
-            withdrawal(1, Decimal::ONE),
-            TransactionKind::Deposit,
-            Decimal::new(3, 0)
-        )]
-        #[case::withdrawal_then_deposit(
-            withdrawal(1, Decimal::ONE),
-            deposit(1, Decimal::ONE),
-            TransactionKind::Withdrawal,
-            Decimal::ONE
-        )]
-        #[case::duplicate_withdrawal(
-            withdrawal(1, Decimal::ONE),
-            withdrawal(1, Decimal::ONE),
-            TransactionKind::Withdrawal,
-            Decimal::ONE
-        )]
+        #[case::deposit_then_withdrawal(deposit(1, Decimal::ONE), withdrawal(1, Decimal::ONE))]
+        #[case::withdrawal_then_deposit(withdrawal(1, Decimal::ONE), deposit(1, Decimal::ONE))]
+        #[case::duplicate_withdrawal(withdrawal(1, Decimal::ONE), withdrawal(1, Decimal::ONE))]
         fn payment_ids_cannot_be_reused(
             #[case] first: PaymentCommand,
             #[case] duplicate: PaymentCommand,
-            #[case] kind: TransactionKind,
-            #[case] available: Decimal,
         ) {
-            let mut account = Account::new(ClientId(42));
-            account
-                .apply(deposit(9, Decimal::new(2, 0)))
-                .expect("funding succeeds");
-            account.apply(first).expect("first payment succeeds");
+            let initial = || {
+                let mut account = Account::new(ClientId(42));
+                account
+                    .apply(deposit(9, Decimal::new(2, 0)))
+                    .expect("funding succeeds");
+                account.apply(first).expect("first payment succeeds");
+                account
+            };
+            let mut account = initial();
 
             assert_eq!(
                 account.apply(duplicate),
                 Err(DomainError::DuplicateTransaction)
             );
-            assert_eq!(
-                account,
-                Account {
-                    client_id: ClientId(42),
-                    balance: test_balance(available, Decimal::ZERO),
-                    status: AccountStatus::Active,
-                    transactions: HashMap::from([
-                        (TransactionId(9), deposit_transaction(9, Decimal::new(2, 0))),
-                        (
-                            TransactionId(1),
-                            Transaction::new(
-                                TransactionId(1),
-                                kind,
-                                TransactionAmount::new(Decimal::ONE).expect("valid amount"),
-                            )
-                        ),
-                    ]),
-                }
-            );
+            assert_eq!(account, initial());
         }
     }
 
@@ -541,6 +506,22 @@ mod tests {
         use super::*;
         use crate::domain_types::AccountStatus::{Active, Locked};
         use crate::domain_types::TransactionState::{ChargedBack, Disputed, Normal};
+
+        fn test_balance(available: Decimal, held: Decimal) -> Balance {
+            Balance::new(
+                Money::new(available).expect("valid available"),
+                Money::new(held).expect("valid held"),
+            )
+            .expect("valid balance")
+        }
+
+        fn withdrawal_transaction(transaction_id: u32, amount: Decimal) -> Transaction {
+            Transaction::new(
+                TransactionId(transaction_id),
+                TransactionKind::Withdrawal,
+                TransactionAmount::new(amount).expect("valid withdrawal amount"),
+            )
+        }
 
         fn dispute(transaction_id: u32) -> PaymentCommand {
             PaymentCommand::Dispute {

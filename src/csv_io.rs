@@ -121,6 +121,7 @@ mod tests {
     mod from_account {
         use std::collections::HashMap;
 
+        use rstest::rstest;
         use rust_decimal::Decimal;
 
         use crate::{
@@ -129,54 +130,63 @@ mod tests {
             domain::types::{AccountStatus, ClientId, Money},
         };
 
-        #[test]
-        fn maps_a_new_account_to_an_unlocked_row() {
-            let row = AccountRow::from_account(&Account::new(ClientId(42)));
-
-            assert_eq!(
-                row,
-                AccountRow {
-                    client: 42,
-                    available: "0".into(),
-                    held: "0".into(),
-                    total: "0".into(),
-                    locked: false,
-                }
-            );
-        }
-
-        #[test]
-        fn maps_a_locked_account_with_fractional_balances() {
-            let account = Account::new(ClientId(7)).with_test_state(
+        #[rstest]
+        #[case::new_account(
+            Account::new(ClientId(42)),
+            AccountRow {
+                client: 42,
+                available: "0".into(),
+                held: "0".into(),
+                total: "0".into(),
+                locked: false,
+            },
+        )]
+        #[case::locked_account_with_fractional_balances(
+            Account::new(ClientId(7)).with_test_state(
                 Money::new(Decimal::new(-1_234, 4)).expect("valid available balance"),
                 Money::new(Decimal::new(20_000, 4)).expect("valid held balance"),
                 AccountStatus::Locked,
                 HashMap::new(),
-            );
-
-            let row = AccountRow::from_account(&account);
-
-            assert_eq!(
-                row,
-                AccountRow {
-                    client: 7,
-                    available: "-0.1234".into(),
-                    held: "2.0000".into(),
-                    total: "1.8766".into(),
-                    locked: true,
-                }
-            );
+            ),
+            AccountRow {
+                client: 7,
+                available: "-0.1234".into(),
+                held: "2.0000".into(),
+                total: "1.8766".into(),
+                locked: true,
+            },
+        )]
+        fn maps_account_balances_and_status_to_a_row(
+            #[case] account: Account,
+            #[case] expected: AccountRow,
+        ) {
+            assert_eq!(AccountRow::from_account(&account), expected);
         }
     }
 
     mod write_accounts {
         use std::io::{self, Write};
 
+        use rstest::rstest;
+
         use crate::csv_io::{AccountRow, write_accounts};
 
-        #[test]
-        fn writes_accounts_in_input_order_with_a_single_header() {
-            let rows = [
+        struct FlushFails;
+
+        impl Write for FlushFails {
+            fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+                Ok(buffer.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Err(io::Error::other("flush failed"))
+            }
+        }
+
+        #[rstest]
+        #[case::no_accounts(vec![], b"client,available,held,total,locked\n")]
+        #[case::accounts_in_input_order(
+            vec![
                 AccountRow {
                     client: 9,
                     available: "-0.1234".into(),
@@ -191,34 +201,17 @@ mod tests {
                     total: "3.1".into(),
                     locked: true,
                 },
-            ];
+            ],
+            b"client,available,held,total,locked\n9,-0.1234,2.0000,1.8766,false\n1,3.1,0,3.1,true\n",
+        )]
+        fn writes_accounts_in_input_order_with_a_single_header(
+            #[case] rows: Vec<AccountRow>,
+            #[case] expected: &[u8],
+        ) {
             let mut output = Vec::new();
             write_accounts(&mut output, rows).expect("accounts should serialize");
 
-            assert_eq!(
-                output,
-                b"client,available,held,total,locked\n9,-0.1234,2.0000,1.8766,false\n1,3.1,0,3.1,true\n"
-            );
-        }
-
-        #[test]
-        fn writes_the_header_with_no_accounts() {
-            let mut output = Vec::new();
-            write_accounts(&mut output, []).expect("header should be written");
-
-            assert_eq!(output, b"client,available,held,total,locked\n");
-        }
-
-        struct FlushFails;
-
-        impl Write for FlushFails {
-            fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-                Ok(buffer.len())
-            }
-
-            fn flush(&mut self) -> io::Result<()> {
-                Err(io::Error::other("flush failed"))
-            }
+            assert_eq!(output, expected);
         }
 
         #[test]
@@ -232,7 +225,17 @@ mod tests {
     mod read_transactions {
         use std::io::{self, Cursor, Read};
 
+        use rstest::rstest;
+
         use crate::csv_io::{TransactionRow, read_transactions};
+
+        struct FailingReader;
+
+        impl Read for FailingReader {
+            fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::other("input read failed"))
+            }
+        }
 
         #[test]
         fn reads_mixed_transactions_in_input_order() {
@@ -307,26 +310,22 @@ chargeback,2,9,
             );
         }
 
-        #[test]
-        fn preserves_amount_text_and_treats_blank_amounts_as_none() {
-            for (amount, expected) in [("", None), ("   ", None), ("1.2300", Some("1.2300"))] {
-                let input = format!("type,client,tx,amount\ndeposit,1,2,{amount}\n");
-                let row = read_transactions(input.as_bytes())
-                    .expect("headers should be readable")
-                    .next()
-                    .expect("input should contain a row")
-                    .expect("row should deserialize");
+        #[rstest]
+        #[case::empty("", None)]
+        #[case::whitespace("   ", None)]
+        #[case::trailing_zeroes("1.2300", Some("1.2300"))]
+        fn preserves_amount_text_and_treats_blank_amounts_as_none(
+            #[case] amount: &str,
+            #[case] expected: Option<&str>,
+        ) {
+            let input = format!("type,client,tx,amount\ndeposit,1,2,{amount}\n");
+            let row = read_transactions(input.as_bytes())
+                .expect("headers should be readable")
+                .next()
+                .expect("input should contain a row")
+                .expect("row should deserialize");
 
-                assert_eq!(row.amount.as_deref(), expected, "input amount: {amount}");
-            }
-        }
-
-        struct FailingReader;
-
-        impl Read for FailingReader {
-            fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
-                Err(io::Error::other("input read failed"))
-            }
+            assert_eq!(row.amount.as_deref(), expected);
         }
 
         #[test]
@@ -363,6 +362,7 @@ chargeback,2,9,
     }
 
     mod into_command {
+        use rstest::rstest;
         use rust_decimal::Decimal;
 
         use crate::{
@@ -373,69 +373,83 @@ chargeback,2,9,
             },
         };
 
-        #[test]
-        fn converts_csv_rows_to_payment_commands() {
-            let input = "\
-type,client,tx,amount
- deposit , 65535 , 4294967295 , 12.3400
-withdrawal,1,3,0.5
-dispute,65535,4294967295,
-resolve,65535,4294967295,
-chargeback,65535,4294967295,
-";
-            let commands = read_transactions(input.as_bytes())
-                .expect("headers should be readable")
-                .map(|row| row.expect("row should deserialize").into_command())
-                .collect::<Result<Vec<_>, _>>()
-                .expect("rows should convert to payment commands");
-
-            let client_id = ClientId(u16::MAX);
-            let transaction_id = TransactionId(u32::MAX);
-            assert_eq!(
-                commands,
-                [
-                    PaymentCommand::Deposit {
-                        client_id,
-                        transaction_id,
-                        amount: TransactionAmount::new(Decimal::new(123_400, 4))
-                            .expect("valid deposit amount"),
-                    },
-                    PaymentCommand::Withdrawal {
-                        client_id: ClientId(1),
-                        transaction_id: TransactionId(3),
-                        amount: TransactionAmount::new(Decimal::new(5, 1))
-                            .expect("valid withdrawal amount"),
-                    },
-                    PaymentCommand::Dispute {
-                        client_id,
-                        transaction_id,
-                    },
-                    PaymentCommand::Resolve {
-                        client_id,
-                        transaction_id,
-                    },
-                    PaymentCommand::Chargeback {
-                        client_id,
-                        transaction_id,
-                    },
-                ]
-            );
+        fn transaction_row(kind: &str, amount: Option<&str>) -> TransactionRow {
+            TransactionRow {
+                r#type: kind.into(),
+                client: 1,
+                tx: 2,
+                amount: amount.map(str::to_owned),
+            }
         }
 
-        #[test]
-        fn rejects_amounts_that_do_not_match_the_command() {
-            for kind in ["deposit", "withdrawal"] {
-                assert_eq!(
-                    transaction_row(kind, None).into_command(),
-                    Err(CsvError::MissingAmount)
-                );
-            }
-            for kind in ["dispute", "resolve", "chargeback"] {
-                assert_eq!(
-                    transaction_row(kind, Some("1")).into_command(),
-                    Err(CsvError::UnexpectedAmount)
-                );
-            }
+        #[rstest]
+        #[case::deposit(
+            " deposit , 65535 , 4294967295 , 12.3400",
+            PaymentCommand::Deposit {
+                client_id: ClientId(u16::MAX),
+                transaction_id: TransactionId(u32::MAX),
+                amount: TransactionAmount::new(Decimal::new(123_400, 4))
+                    .expect("valid deposit amount"),
+            },
+        )]
+        #[case::withdrawal(
+            "withdrawal,1,3,0.5",
+            PaymentCommand::Withdrawal {
+                client_id: ClientId(1),
+                transaction_id: TransactionId(3),
+                amount: TransactionAmount::new(Decimal::new(5, 1))
+                    .expect("valid withdrawal amount"),
+            },
+        )]
+        #[case::dispute(
+            "dispute,65535,4294967295,",
+            PaymentCommand::Dispute {
+                client_id: ClientId(u16::MAX),
+                transaction_id: TransactionId(u32::MAX),
+            },
+        )]
+        #[case::resolve(
+            "resolve,65535,4294967295,",
+            PaymentCommand::Resolve {
+                client_id: ClientId(u16::MAX),
+                transaction_id: TransactionId(u32::MAX),
+            },
+        )]
+        #[case::chargeback(
+            "chargeback,65535,4294967295,",
+            PaymentCommand::Chargeback {
+                client_id: ClientId(u16::MAX),
+                transaction_id: TransactionId(u32::MAX),
+            },
+        )]
+        fn converts_csv_rows_to_payment_commands(
+            #[case] row: &str,
+            #[case] expected: PaymentCommand,
+        ) {
+            let input = format!("type,client,tx,amount\n{row}\n");
+            let command = read_transactions(input.as_bytes())
+                .expect("headers should be readable")
+                .next()
+                .expect("input should contain a row")
+                .expect("row should deserialize")
+                .into_command()
+                .expect("row should convert to a payment command");
+
+            assert_eq!(command, expected);
+        }
+
+        #[rstest]
+        #[case::deposit_without_amount("deposit", None, CsvError::MissingAmount)]
+        #[case::withdrawal_without_amount("withdrawal", None, CsvError::MissingAmount)]
+        #[case::dispute_with_amount("dispute", Some("1"), CsvError::UnexpectedAmount)]
+        #[case::resolve_with_amount("resolve", Some("1"), CsvError::UnexpectedAmount)]
+        #[case::chargeback_with_amount("chargeback", Some("1"), CsvError::UnexpectedAmount)]
+        fn rejects_amounts_that_do_not_match_the_command(
+            #[case] kind: &str,
+            #[case] amount: Option<&str>,
+            #[case] expected: CsvError,
+        ) {
+            assert_eq!(transaction_row(kind, amount).into_command(), Err(expected));
         }
 
         #[test]
@@ -446,14 +460,14 @@ chargeback,65535,4294967295,
             );
         }
 
-        #[test]
-        fn rejects_invalid_decimal_text_without_rounding() {
-            for amount in ["abc", "12345678901234567890123456789.1234"] {
-                assert!(matches!(
-                    transaction_row("deposit", Some(amount)).into_command(),
-                    Err(CsvError::InvalidDecimal(_))
-                ));
-            }
+        #[rstest]
+        #[case::non_numeric("abc")]
+        #[case::unrepresentable_without_rounding("12345678901234567890123456789.1234")]
+        fn rejects_invalid_decimal_text_without_rounding(#[case] amount: &str) {
+            assert!(matches!(
+                transaction_row("deposit", Some(amount)).into_command(),
+                Err(CsvError::InvalidDecimal(_))
+            ));
         }
 
         #[test]
@@ -462,15 +476,6 @@ chargeback,65535,4294967295,
                 transaction_row("withdrawal", Some("0.12345")).into_command(),
                 Err(CsvError::InvalidAmount(DomainError::ExcessivePrecision))
             );
-        }
-
-        fn transaction_row(kind: &str, amount: Option<&str>) -> TransactionRow {
-            TransactionRow {
-                r#type: kind.into(),
-                client: 1,
-                tx: 2,
-                amount: amount.map(str::to_owned),
-            }
         }
     }
 }

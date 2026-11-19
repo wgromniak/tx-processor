@@ -21,24 +21,28 @@ pub fn read_transactions(
 
     Ok(reader
         .into_deserialize::<TransactionRow>()
-        .filter_map(|row| {
-            let row = match row {
-                Ok(row) => row,
-                Err(error) if error.is_io_error() => return Some(Err(error)),
-                Err(error) => {
-                    eprintln!("Could not read transaction: {error}");
-                    return None;
-                }
-            };
+        .filter_map(command_from_row))
+}
 
-            match row.into_command() {
-                Ok(command) => Some(Ok(command)),
-                Err(error) => {
-                    eprintln!("Invalid transaction: {error:?}");
-                    None
-                }
-            }
-        }))
+fn command_from_row(
+    row: Result<TransactionRow, csv::Error>,
+) -> Option<Result<PaymentCommand, csv::Error>> {
+    let row = match row {
+        Ok(row) => row,
+        Err(error) if error.is_io_error() => return Some(Err(error)),
+        Err(error) => {
+            eprintln!("Could not read transaction: {error}");
+            return None;
+        }
+    };
+
+    match row.into_command() {
+        Ok(command) => Some(Ok(command)),
+        Err(error) => {
+            eprintln!("Invalid transaction: {error:?}");
+            None
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]

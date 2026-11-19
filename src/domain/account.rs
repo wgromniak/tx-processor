@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
-use crate::domain_types::{
-    AccountStatus, Balance, ClientId, DomainError, PaymentCommand, Transaction, TransactionAmount,
-    TransactionId, TransactionKind,
+use crate::domain::{
+    transaction::{Transaction, TransactionAmount, TransactionId, TransactionKind},
+    types::{AccountStatus, Balance, ClientId, DomainError, PaymentCommand},
 };
 
 #[cfg(test)]
-use crate::domain_types::Money;
+use crate::domain::types::Money;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Account {
@@ -111,8 +111,14 @@ impl Account {
             return Ok(());
         }
 
-        let available = self.balance.available().checked_sub(transaction.amount())?;
-        let held = self.balance.held().checked_add(transaction.amount())?;
+        let available = self
+            .balance
+            .available()
+            .checked_sub(transaction.amount().money())?;
+        let held = self
+            .balance
+            .held()
+            .checked_add(transaction.amount().money())?;
         let balance = Balance::new(available, held)?;
 
         transaction.dispute()?;
@@ -128,8 +134,14 @@ impl Account {
             return Ok(());
         }
 
-        let available = self.balance.available().checked_add(transaction.amount())?;
-        let held = self.balance.held().checked_sub(transaction.amount())?;
+        let available = self
+            .balance
+            .available()
+            .checked_add(transaction.amount().money())?;
+        let held = self
+            .balance
+            .held()
+            .checked_sub(transaction.amount().money())?;
         let balance = Balance::new(available, held)?;
 
         transaction.resolve()?;
@@ -145,7 +157,10 @@ impl Account {
             return Ok(());
         }
 
-        let held = self.balance.held().checked_sub(transaction.amount())?;
+        let held = self
+            .balance
+            .held()
+            .checked_sub(transaction.amount().money())?;
         let balance = Balance::new(self.balance.available(), held)?;
 
         transaction.chargeback()?;
@@ -176,9 +191,11 @@ mod tests {
     use rust_decimal::Decimal;
 
     use super::Account;
-    use crate::domain_types::{
-        AccountStatus, Balance, ClientId, DomainError, Money, PaymentCommand, Transaction,
-        TransactionAmount, TransactionId, TransactionKind, TransactionState,
+    use crate::domain::{
+        transaction::{
+            Transaction, TransactionAmount, TransactionId, TransactionKind, TransactionState,
+        },
+        types::{AccountStatus, Balance, ClientId, DomainError, Money, PaymentCommand},
     };
 
     #[test]
@@ -504,8 +521,8 @@ mod tests {
         use rstest::rstest;
 
         use super::*;
-        use crate::domain_types::AccountStatus::{Active, Locked};
-        use crate::domain_types::TransactionState::{ChargedBack, Disputed, Normal};
+        use crate::domain::transaction::TransactionState::{ChargedBack, Disputed, Normal};
+        use crate::domain::types::AccountStatus::{Active, Locked};
 
         fn test_balance(available: Decimal, held: Decimal) -> Balance {
             Balance::new(

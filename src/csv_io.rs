@@ -233,6 +233,8 @@ mod tests {
     mod read_transactions {
         use std::io::{self, Cursor, Read};
 
+        use rstest::rstest;
+
         use crate::csv_io::{TransactionRow, read_transactions};
 
         #[test]
@@ -308,18 +310,30 @@ chargeback,2,9,
             );
         }
 
-        #[test]
-        fn preserves_amount_text_and_treats_blank_amounts_as_none() {
-            for (amount, expected) in [("", None), ("   ", None), ("1.2300", Some("1.2300"))] {
-                let input = format!("type,client,tx,amount\ndeposit,1,2,{amount}\n");
-                let row = read_transactions(input.as_bytes())
-                    .expect("headers should be readable")
-                    .next()
-                    .expect("input should contain a row")
-                    .expect("row should deserialize");
+        #[rstest]
+        #[case::empty("", None)]
+        #[case::whitespace("   ", None)]
+        #[case::decimal_text("1.2300", Some("1.2300"))]
+        fn preserves_amount_text_and_treats_blank_amounts_as_none(
+            #[case] amount: &str,
+            #[case] expected: Option<&str>,
+        ) {
+            let input = format!("type,client,tx,amount\ndeposit,1,2,{amount}\n");
+            let row = read_transactions(input.as_bytes())
+                .expect("headers should be readable")
+                .next()
+                .expect("input should contain a row")
+                .expect("row should deserialize");
 
-                assert_eq!(row.amount.as_deref(), expected, "input amount: {amount}");
-            }
+            assert_eq!(
+                row,
+                TransactionRow {
+                    r#type: "deposit".into(),
+                    client: 1,
+                    tx: 2,
+                    amount: expected.map(str::to_owned),
+                }
+            );
         }
 
         struct FailingReader;
@@ -364,6 +378,7 @@ chargeback,2,9,
     }
 
     mod into_command {
+        use rstest::rstest;
         use rust_decimal::Decimal;
 
         use crate::{
@@ -422,20 +437,18 @@ chargeback,65535,4294967295,
             );
         }
 
-        #[test]
-        fn rejects_amounts_that_do_not_match_the_command() {
-            for kind in ["deposit", "withdrawal"] {
-                assert_eq!(
-                    transaction_row(kind, None).into_command(),
-                    Err(CsvError::MissingAmount)
-                );
-            }
-            for kind in ["dispute", "resolve", "chargeback"] {
-                assert_eq!(
-                    transaction_row(kind, Some("1")).into_command(),
-                    Err(CsvError::UnexpectedAmount)
-                );
-            }
+        #[rstest]
+        #[case::deposit("deposit", None, CsvError::MissingAmount)]
+        #[case::withdrawal("withdrawal", None, CsvError::MissingAmount)]
+        #[case::dispute("dispute", Some("1"), CsvError::UnexpectedAmount)]
+        #[case::resolve("resolve", Some("1"), CsvError::UnexpectedAmount)]
+        #[case::chargeback("chargeback", Some("1"), CsvError::UnexpectedAmount)]
+        fn rejects_amounts_that_do_not_match_the_command(
+            #[case] kind: &str,
+            #[case] amount: Option<&str>,
+            #[case] expected: CsvError,
+        ) {
+            assert_eq!(transaction_row(kind, amount).into_command(), Err(expected));
         }
 
         #[test]
@@ -446,14 +459,14 @@ chargeback,65535,4294967295,
             );
         }
 
-        #[test]
-        fn rejects_invalid_decimal_text_without_rounding() {
-            for amount in ["abc", "12345678901234567890123456789.1234"] {
-                assert!(matches!(
-                    transaction_row("deposit", Some(amount)).into_command(),
-                    Err(CsvError::InvalidDecimal(_))
-                ));
-            }
+        #[rstest]
+        #[case::non_numeric("abc")]
+        #[case::unrepresentable("12345678901234567890123456789.1234")]
+        fn rejects_invalid_decimal_text_without_rounding(#[case] amount: &str) {
+            assert!(matches!(
+                transaction_row("deposit", Some(amount)).into_command(),
+                Err(CsvError::InvalidDecimal(_))
+            ));
         }
 
         #[test]

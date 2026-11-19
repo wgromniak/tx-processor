@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::domain::{
     transaction::{Transaction, TransactionAmount, TransactionId, TransactionKind},
@@ -14,7 +14,6 @@ pub struct Account {
     balance: Balance,
     status: AccountStatus,
     deposits: HashMap<TransactionId, Transaction>,
-    withdrawal_ids: HashSet<TransactionId>,
 }
 
 impl Account {
@@ -24,7 +23,6 @@ impl Account {
             balance: Balance::ZERO,
             status: AccountStatus::Active,
             deposits: HashMap::new(),
-            withdrawal_ids: HashSet::new(),
         }
     }
 
@@ -62,16 +60,12 @@ impl Account {
         }
     }
 
-    fn contains_transaction(&self, transaction_id: TransactionId) -> bool {
-        self.deposits.contains_key(&transaction_id) || self.withdrawal_ids.contains(&transaction_id)
-    }
-
     fn deposit(
         &mut self,
         transaction_id: TransactionId,
         amount: TransactionAmount,
     ) -> Result<(), DomainError> {
-        if self.contains_transaction(transaction_id) {
+        if self.deposits.contains_key(&transaction_id) {
             return Err(DomainError::DuplicateTransaction);
         }
 
@@ -90,7 +84,7 @@ impl Account {
         transaction_id: TransactionId,
         amount: TransactionAmount,
     ) -> Result<(), DomainError> {
-        if self.contains_transaction(transaction_id) {
+        if self.deposits.contains_key(&transaction_id) {
             return Err(DomainError::DuplicateTransaction);
         }
         if self.status == AccountStatus::Locked
@@ -102,7 +96,6 @@ impl Account {
         let available = self.balance.available().checked_sub(amount.money())?;
 
         self.balance = Balance::new(available, self.balance.held())?;
-        self.withdrawal_ids.insert(transaction_id);
         Ok(())
     }
 
@@ -189,7 +182,7 @@ impl Account {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
 
     use rstest::rstest;
     use rust_decimal::Decimal;
@@ -258,7 +251,6 @@ mod tests {
                 balance: Balance::ZERO,
                 status: AccountStatus::Active,
                 deposits: HashMap::new(),
-                withdrawal_ids: HashSet::new(),
             }
         );
     }
@@ -353,20 +345,23 @@ mod tests {
                         .iter()
                         .map(|&(id, amount)| (TransactionId(id), deposit_transaction(id, amount)))
                         .collect(),
-                    withdrawal_ids: HashSet::new(),
                 }
             );
         }
 
-        #[test]
-        fn duplicate_deposit_does_not_credit_again_or_overwrite_history() {
+        #[rstest]
+        #[case::deposit(deposit(1, Decimal::new(2, 0)))]
+        #[case::withdrawal(withdrawal(1, Decimal::ONE))]
+        fn reusing_a_deposit_id_leaves_balance_and_history_unchanged(
+            #[case] command: PaymentCommand,
+        ) {
             let mut account = Account::new(ClientId(42));
             account
                 .apply(deposit(1, Decimal::ONE))
                 .expect("first deposit should succeed");
 
             assert_eq!(
-                account.apply(deposit(1, Decimal::new(2, 0))),
+                account.apply(command),
                 Err(DomainError::DuplicateTransaction)
             );
 
@@ -384,7 +379,6 @@ mod tests {
                         TransactionId(1),
                         deposit_transaction(1, Decimal::ONE),
                     )]),
-                    withdrawal_ids: HashSet::new(),
                 }
             );
         }
@@ -423,7 +417,6 @@ mod tests {
                     .expect("valid balance"),
                     status: AccountStatus::Active,
                     deposits: HashMap::new(),
-                    withdrawal_ids: HashSet::new(),
                 }
             );
         }
@@ -432,19 +425,10 @@ mod tests {
     mod withdrawals {
         use super::*;
 
-        fn funded_account_after_payment(command: PaymentCommand) -> Account {
-            let mut account = Account::new(ClientId(42));
-            account
-                .apply(deposit(9, Decimal::new(2, 0)))
-                .expect("funding succeeds");
-            account.apply(command).expect("first payment succeeds");
-            account
-        }
-
         #[rstest]
         #[case::fractional(Decimal::new(12_345, 4), Decimal::new(1, 4))]
         #[case::exact_available(Decimal::new(3, 1), Decimal::new(3, 1))]
-        fn withdrawals_debit_only_available_funds_and_record_history(
+        fn withdrawals_debit_available_funds_without_recording_history(
             #[case] available: Decimal,
             #[case] amount: Decimal,
         ) {
@@ -470,7 +454,6 @@ mod tests {
                     .expect("valid balance"),
                     status: AccountStatus::Active,
                     deposits: HashMap::new(),
-                    withdrawal_ids: HashSet::from([TransactionId(0)]),
                 }
             );
         }
@@ -502,26 +485,34 @@ mod tests {
                     balance,
                     status,
                     deposits: HashMap::new(),
-                    withdrawal_ids: HashSet::new(),
                 }
             );
         }
 
-        #[rstest]
-        #[case::deposit_then_withdrawal(deposit(1, Decimal::ONE), withdrawal(1, Decimal::ONE))]
-        #[case::withdrawal_then_deposit(withdrawal(1, Decimal::ONE), deposit(1, Decimal::ONE))]
-        #[case::duplicate_withdrawal(withdrawal(1, Decimal::ONE), withdrawal(1, Decimal::ONE))]
-        fn payment_ids_cannot_be_reused(
-            #[case] first: PaymentCommand,
-            #[case] duplicate: PaymentCommand,
-        ) {
-            let mut account = funded_account_after_payment(first);
+        #[test]
+        fn successful_withdrawals_do_not_reserve_transaction_ids() {
+            let mut account = Account::new(ClientId(42));
+            for command in [
+                deposit(9, Decimal::new(2, 0)),
+                withdrawal(1, Decimal::ONE),
+                withdrawal(1, Decimal::ONE),
+                deposit(1, Decimal::ONE),
+            ] {
+                account.apply(command).expect("payment succeeds");
+            }
 
             assert_eq!(
-                account.apply(duplicate),
-                Err(DomainError::DuplicateTransaction)
+                account,
+                Account::new(ClientId(42)).with_test_state(
+                    Money::new(Decimal::ONE).expect("valid available"),
+                    Money::new(Decimal::ZERO).expect("valid held"),
+                    AccountStatus::Active,
+                    HashMap::from([
+                        (TransactionId(9), deposit_transaction(9, Decimal::new(2, 0))),
+                        (TransactionId(1), deposit_transaction(1, Decimal::ONE)),
+                    ]),
+                )
             );
-            assert_eq!(account, funded_account_after_payment(first));
         }
     }
 
@@ -552,6 +543,9 @@ mod tests {
                 .expect("withdrawal succeeds");
 
             for (command, available, held, first_state, second_state) in [
+                (dispute(3), 2_346, 0, Normal, Normal),
+                (resolve(3), 2_346, 0, Normal, Normal),
+                (chargeback(3), 2_346, 0, Normal, Normal),
                 (dispute(1), -9_999, 12_345, Disputed, Normal),
                 (dispute(2), -10_000, 12_346, Disputed, Disputed),
                 (resolve(1), 2_345, 1, Normal, Disputed),
@@ -577,7 +571,6 @@ mod tests {
                                     .with_test_state(second_state)
                             ),
                         ]),
-                        withdrawal_ids: HashSet::from([TransactionId(3)]),
                     }
                 );
             }
@@ -611,7 +604,6 @@ mod tests {
                             deposit_transaction(2, Decimal::ONE).with_test_state(Disputed)
                         ),
                     ]),
-                    withdrawal_ids: HashSet::new(),
                 }
             );
 
@@ -641,7 +633,6 @@ mod tests {
                             ),
                             (TransactionId(3), deposit_transaction(3, Decimal::ONE)),
                         ]),
-                        withdrawal_ids: HashSet::new(),
                     }
                 );
             }
@@ -688,7 +679,6 @@ mod tests {
                             TransactionId(u32::MAX),
                             deposit_transaction(u32::MAX, amount).with_test_state(state),
                         )]),
-                        withdrawal_ids: HashSet::from([TransactionId(0)]),
                     }
                 );
             }
@@ -698,9 +688,6 @@ mod tests {
         #[case::missing_dispute(Normal, 1, 0, Active, dispute(99))]
         #[case::missing_resolve(Normal, 1, 0, Active, resolve(99))]
         #[case::missing_chargeback(Normal, 1, 0, Active, chargeback(99))]
-        #[case::withdrawal_dispute(Normal, 1, 0, Active, dispute(2))]
-        #[case::withdrawal_resolve(Normal, 1, 0, Active, resolve(2))]
-        #[case::withdrawal_chargeback(Normal, 1, 0, Active, chargeback(2))]
         #[case::repeated_dispute(Disputed, -1, 2, Active, dispute(1))]
         #[case::undisputed_resolve(Normal, 1, 0, Active, resolve(1))]
         #[case::undisputed_chargeback(Normal, 1, 0, Active, chargeback(1))]
@@ -723,7 +710,6 @@ mod tests {
                     TransactionId(1),
                     deposit_transaction(1, Decimal::new(2, 0)).with_test_state(state),
                 )]),
-                withdrawal_ids: HashSet::from([TransactionId(2)]),
             };
             let mut account = expected_account();
 
@@ -759,7 +745,6 @@ mod tests {
                         TransactionId(1),
                         deposit_transaction(1, Decimal::new(1, 4)),
                     )]),
-                    withdrawal_ids: HashSet::new(),
                 }
             );
         }

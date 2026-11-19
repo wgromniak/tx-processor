@@ -5,8 +5,8 @@
 ## Design choices
 
 1. The app has separate layers with the following dependencies: main.rs (app wiring) -> CSV IO -> domain.
-2. I've chosen rust_decimal for **fixed point arithmetic** for the sake of performance, accepting that its 96-bit coefficient gives a finite range, without going into implementing this myself. A limit on max and min value is enforced to avoid loss of precision (see `Money::MIN, Money:MAX` in `src/domain/types.rs`). A limit on precision is applied when validating input.
-3. **Defensive programming** is applied when processing input transactions - **failed parsing ommits that row** and continues processing further rows (see `command_from_row` in `csv_io.rs`).
+2. I've chosen rust_decimal for **fixed point arithmetic** for exact monetary calculation without going into implementing this myself, accepting that its 96-bit coefficient gives a finite range. A limit on max and min value is enforced to avoid loss of precision (see `Money::MIN, Money::MAX` in `src/domain/types.rs`). A limit on precision is applied when validating input.
+3. **Defensive programming** is applied when processing input transactions - **failed parsing omits that row** and continues processing further rows (see `command_from_row` in `csv_io.rs`).
 4. **Offensive programming** is applied when there is an IO error or error in domain logic - **failed transaction processing** results in the application exiting (see `run` in `main.rs`).
 5. Single `DomainError` (in `domain/types.rs`) for simplicity (avoid translating errors within domain, don't add dependencies on `anyhow` or `thiserror`). 
 6. `Money` type can hold positive and negative values (see domain assumptions below). `TransactionAmount` can hold only positive `Money`.
@@ -42,7 +42,7 @@ tx-processor
 2. Only deposits can be disputed.
 3. A locked account cannot process withdrawals, but continues processing all other operations (deposits, disputes, resolutions, chargebacks).
 4. Transaction disputed and then resolved can be later disputed again.
-5. Globally unique trasanction ids are trusted - there is only validation of uniqueness per client account.
+5. Globally unique transactions ids are trusted - there is only validation of uniqueness per client account.
 6. When a state transition is not allowed (e.g. from chargeback to disputed), the transition is ignored, there is no error.
 7. All monetary values fit between `Money::MIN, Money:MAX` (see Design choices above).
 8. All transaction amounts are assumed to be positive - validated at transaction parsing (invalid transactions are discarded - see Defensive programming above).
@@ -62,7 +62,7 @@ My implementation plan (incremental, TDD-style, human-reviewable at each stage w
 
 1. Rust guardrails: fmt, clippy.
 2. App skeleton with hardcoded return values and `e2e-test.sh`.
-3. Design and scaffolding of types: domain, CSV IO, PaymentProcessor. Gradually eastablish standards for the code, including testing.
+3. Design and scaffolding of types: domain, CSV IO, PaymentProcessor. Gradually establish standards for the code, including testing.
 4. Implementation of read/write IO and parsing to/from domain types.
 5. Wiring of the entire app with dummy business logic (hardcoded return values).
 6. Incremental implementation of domain logic with thorough testing.

@@ -1,3 +1,5 @@
+use std::{error::Error, fmt};
+
 use super::transaction::{TransactionAmount, TransactionId};
 
 use rust_decimal::Decimal;
@@ -140,8 +142,64 @@ pub enum DomainError {
     InvalidTransactionTransition,
 }
 
+impl fmt::Display for DomainError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::ExcessivePrecision => "amount exceeds four decimal places",
+            Self::NonPositiveAmount => "transaction amount must be positive",
+            Self::ClientMismatch => "transaction and account client IDs differ",
+            Self::DuplicateTransaction => "duplicate transaction ID",
+            Self::AmountOutOfRange => "amount is outside the supported range",
+            Self::InvalidTransactionTransition => "invalid transaction state transition",
+        })
+    }
+}
+
+impl Error for DomainError {}
+
 #[cfg(test)]
 mod tests {
+    mod domain_error {
+        use std::error::Error;
+
+        use rstest::rstest;
+
+        use crate::domain::types::DomainError;
+
+        #[rstest]
+        #[case::excessive_precision(
+            DomainError::ExcessivePrecision,
+            "amount exceeds four decimal places"
+        )]
+        #[case::non_positive_amount(
+            DomainError::NonPositiveAmount,
+            "transaction amount must be positive"
+        )]
+        #[case::client_mismatch(
+            DomainError::ClientMismatch,
+            "transaction and account client IDs differ"
+        )]
+        #[case::duplicate_transaction(
+            DomainError::DuplicateTransaction,
+            "duplicate transaction ID"
+        )]
+        #[case::amount_out_of_range(
+            DomainError::AmountOutOfRange,
+            "amount is outside the supported range"
+        )]
+        #[case::invalid_transaction_transition(
+            DomainError::InvalidTransactionTransition,
+            "invalid transaction state transition"
+        )]
+        fn displays_leaf_errors_without_a_source(
+            #[case] error: DomainError,
+            #[case] message: &str,
+        ) {
+            assert_eq!(error.to_string(), message);
+            assert!(error.source().is_none());
+        }
+    }
+
     mod balance {
         use rust_decimal::Decimal;
 

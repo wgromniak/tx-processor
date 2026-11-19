@@ -1,4 +1,8 @@
-use std::io::{Read, Write};
+use std::{
+    error::Error,
+    fmt,
+    io::{Read, Write},
+};
 
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -156,8 +160,94 @@ pub enum CsvError {
     InvalidAmount(DomainError),
 }
 
+impl fmt::Display for CsvError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidHeaders(details) => write!(f, "invalid CSV headers ({details})"),
+            Self::UnknownTransactionType(kind) => write!(f, "unknown transaction type {kind:?}"),
+            Self::MissingAmount => f.write_str("missing transaction amount"),
+            Self::UnexpectedAmount => f.write_str("unexpected transaction amount"),
+            Self::InvalidDecimal(_) => f.write_str("invalid decimal amount"),
+            Self::InvalidAmount(_) => f.write_str("invalid transaction amount"),
+        }
+    }
+}
+
+impl Error for CsvError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::InvalidDecimal(error) => Some(error),
+            Self::InvalidAmount(error) => Some(error),
+            Self::InvalidHeaders(_)
+            | Self::UnknownTransactionType(_)
+            | Self::MissingAmount
+            | Self::UnexpectedAmount => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    mod csv_error {
+        use std::error::Error;
+
+        use rstest::rstest;
+
+        use crate::{
+            csv_io::{CsvError, TransactionRow},
+            domain::types::{DomainError, PaymentCommand},
+        };
+
+        #[rstest]
+        #[case::invalid_headers(
+            CsvError::InvalidHeaders("missing required CSV header type".into()),
+            "invalid CSV headers (missing required CSV header type)"
+        )]
+        #[case::unknown_transaction_type(
+            CsvError::UnknownTransactionType("transfer".into()),
+            r#"unknown transaction type "transfer""#
+        )]
+        #[case::missing_amount(CsvError::MissingAmount, "missing transaction amount")]
+        #[case::unexpected_amount(CsvError::UnexpectedAmount, "unexpected transaction amount")]
+        fn displays_leaf_errors_without_a_source(#[case] error: CsvError, #[case] message: &str) {
+            assert_eq!(error.to_string(), message);
+            assert!(error.source().is_none());
+        }
+
+        #[test]
+        fn exposes_the_decimal_error_as_its_source() {
+            let error = CsvError::InvalidDecimal(rust_decimal::Error::Underflow);
+
+            assert_eq!(error.to_string(), "invalid decimal amount");
+            assert_eq!(
+                error.source().and_then(<dyn Error>::downcast_ref),
+                Some(&rust_decimal::Error::Underflow)
+            );
+        }
+
+        #[test]
+        fn preserves_the_domain_source_after_boxed_propagation() {
+            fn into_command(row: TransactionRow) -> Result<PaymentCommand, Box<dyn Error>> {
+                Ok(row.into_command()?)
+            }
+
+            let error = into_command(TransactionRow {
+                r#type: "deposit".into(),
+                client: 1,
+                tx: 1,
+                amount: Some("0".into()),
+            })
+            .expect_err("zero amount should be rejected");
+
+            assert!(error.is::<CsvError>());
+            assert_eq!(error.to_string(), "invalid transaction amount");
+            assert_eq!(
+                error.source().and_then(<dyn Error>::downcast_ref),
+                Some(&DomainError::NonPositiveAmount)
+            );
+        }
+    }
+
     mod from_account {
         use std::collections::HashMap;
 

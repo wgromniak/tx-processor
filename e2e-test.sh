@@ -54,5 +54,22 @@ CSV
     grep -Fq 'UnknownTransactionType("transfer")' "$test_dir/error.log"
 }
 
+test_rejects_invalid_headers_without_writing_accounts() {
+    cat > "$test_dir/invalid-headers.csv" <<'CSV'
+type,client,tx
+deposit,7,1
+CSV
+
+    if cargo run --quiet --locked -- "$test_dir/invalid-headers.csv" \
+        > "$test_dir/invalid-headers-output.csv" 2> "$test_dir/invalid-headers-error.log"; then
+        echo 'Expected an invalid CSV header to fail' >&2
+        return 1
+    fi
+
+    test ! -s "$test_dir/invalid-headers-output.csv"
+    grep -Fq 'missing required CSV header "amount"' "$test_dir/invalid-headers-error.log"
+}
+
 test_processes_transactions_and_locks_charged_back_accounts
 test_skips_invalid_rows_and_continues_processing
+test_rejects_invalid_headers_without_writing_accounts

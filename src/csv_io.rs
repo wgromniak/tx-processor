@@ -1,4 +1,8 @@
-use std::io::{Read, Write};
+use std::{
+    error::Error,
+    fmt,
+    io::{Read, Write},
+};
 
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -10,18 +14,55 @@ use crate::domain::{
 };
 
 /// Streams validated commands, logging and skipping invalid CSV rows or commands.
+/// The trimmed header must contain `type`, `client`, `tx`, and `amount` exactly once.
 /// Header errors are returned immediately and I/O errors during iteration are yielded.
 pub fn read_transactions(
     reader: impl Read,
-) -> Result<impl Iterator<Item = Result<PaymentCommand, csv::Error>>, csv::Error> {
+) -> Result<impl Iterator<Item = Result<PaymentCommand, csv::Error>>, ReadTransactionsError> {
     let mut reader = csv::ReaderBuilder::new()
         .trim(csv::Trim::All)
         .from_reader(reader);
-    reader.headers()?;
+    let headers = reader.headers().map_err(ReadTransactionsError::Csv)?;
+
+    for name in ["type", "client", "tx", "amount"] {
+        match headers.iter().filter(|header| *header == name).count() {
+            0 => return Err(ReadTransactionsError::MissingHeader(name)),
+            1 => (),
+            _ => return Err(ReadTransactionsError::DuplicateHeader(name)),
+        }
+    }
 
     Ok(reader
         .into_deserialize::<TransactionRow>()
         .filter_map(command_from_row))
+}
+
+#[derive(Debug)]
+pub enum ReadTransactionsError {
+    Csv(csv::Error),
+    MissingHeader(&'static str),
+    DuplicateHeader(&'static str),
+}
+
+impl fmt::Display for ReadTransactionsError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Csv(error) => error.fmt(formatter),
+            Self::MissingHeader(name) => write!(formatter, "missing required CSV header {name:?}"),
+            Self::DuplicateHeader(name) => {
+                write!(formatter, "duplicate required CSV header {name:?}")
+            }
+        }
+    }
+}
+
+impl Error for ReadTransactionsError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Csv(error) => Some(error),
+            Self::MissingHeader(_) | Self::DuplicateHeader(_) => None,
+        }
+    }
 }
 
 fn command_from_row(
@@ -254,7 +295,7 @@ mod tests {
         use rust_decimal::Decimal;
 
         use crate::{
-            csv_io::read_transactions,
+            csv_io::{ReadTransactionsError, read_transactions},
             domain::{
                 transaction::{TransactionAmount, TransactionId},
                 types::{ClientId, PaymentCommand},
@@ -316,10 +357,13 @@ chargeback,2,9,
             );
         }
 
-        #[test]
-        fn trims_headers_and_fields_and_preserves_amount_scale() {
-            let input = " type , client , tx , amount \n deposit , 7 , 42 , 1.2300 \n";
-
+        #[rstest]
+        #[case::padded(" type , client , tx , amount \n deposit , 7 , 42 , 1.2300 \n")]
+        #[case::reordered("amount,tx,client,type\n1.2300,42,7,deposit\n")]
+        #[case::bom_and_extra_columns(
+            "\u{feff}type,meta,client,tx,amount,meta\ndeposit,x,7,42,1.2300,y\n"
+        )]
+        fn reads_valid_header_variations(#[case] input: &str) {
             let commands = read_transactions(input.as_bytes())
                 .expect("headers should be readable")
                 .collect::<Result<Vec<_>, _>>()
@@ -336,6 +380,41 @@ chargeback,2,9,
                 ),
                 "unexpected commands: {commands:?}"
             );
+        }
+
+        #[rstest]
+        #[case::missing_type("client,tx,amount\n", "type")]
+        #[case::missing_client("type,tx,amount\n", "client")]
+        #[case::missing_tx("type,client,amount\n", "tx")]
+        #[case::missing_amount("type,client,tx\n", "amount")]
+        #[case::empty_input("", "type")]
+        fn rejects_missing_required_headers(#[case] input: &str, #[case] expected: &str) {
+            let result = read_transactions(input.as_bytes());
+
+            assert!(
+                matches!(result, Err(ReadTransactionsError::MissingHeader(name)) if name == expected)
+            );
+        }
+
+        #[rstest]
+        #[case::duplicate_type("type,client,tx,amount, type \n", "type")]
+        #[case::duplicate_client("type,client,tx,amount,client\n", "client")]
+        #[case::duplicate_tx("type,client,tx,amount,tx\n", "tx")]
+        #[case::duplicate_amount("type,client,tx,amount,amount\n", "amount")]
+        fn rejects_duplicate_required_headers(#[case] input: &str, #[case] expected: &str) {
+            let result = read_transactions(input.as_bytes());
+
+            assert!(
+                matches!(result, Err(ReadTransactionsError::DuplicateHeader(name)) if name == expected)
+            );
+        }
+
+        #[test]
+        fn accepts_header_without_transactions() {
+            let mut commands = read_transactions(b"type,client,tx,amount\n".as_slice())
+                .expect("headers should be readable");
+
+            assert!(commands.next().is_none());
         }
 
         #[rstest]
@@ -388,7 +467,7 @@ chargeback,2,9,
                 .err()
                 .expect("header read failure should be returned before iteration");
 
-            assert!(matches!(error.kind(), csv::ErrorKind::Io(_)));
+            assert!(matches!(error, ReadTransactionsError::Csv(error) if error.is_io_error()));
         }
 
         #[test]

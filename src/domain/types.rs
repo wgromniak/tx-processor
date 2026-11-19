@@ -189,6 +189,7 @@ mod tests {
             let money = Money::new(value).expect("valid money");
 
             assert_eq!(money, Money(value));
+            // Decimal equality ignores scale, so verify it separately.
             assert_eq!(money.value().scale(), value.scale());
         }
 

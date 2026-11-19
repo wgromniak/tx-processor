@@ -236,17 +236,6 @@ mod tests {
         }
     }
 
-    fn assert_balance(account: &Account, available: Decimal, held: Decimal) {
-        assert_eq!(
-            account.balance,
-            Balance::new(
-                Money::new(available).expect("valid available"),
-                Money::new(held).expect("valid held"),
-            )
-            .expect("valid balance"),
-        );
-    }
-
     fn deposit_transaction(transaction_id: u32, amount: Decimal) -> Transaction {
         Transaction::new(
             TransactionId(transaction_id),
@@ -463,18 +452,25 @@ mod tests {
                 .apply(withdrawal(0, amount))
                 .expect("withdrawal succeeds");
 
-            assert_balance(&account, available - amount, Decimal::ONE);
-            assert_eq!(account.status, AccountStatus::Active);
             assert_eq!(
-                account.transactions,
-                HashMap::from([(
-                    TransactionId(0),
-                    Transaction::new(
+                account,
+                Account {
+                    client_id: ClientId(42),
+                    balance: Balance::new(
+                        Money::new(available - amount).expect("valid available"),
+                        Money::new(Decimal::ONE).expect("valid held"),
+                    )
+                    .expect("valid balance"),
+                    status: AccountStatus::Active,
+                    transactions: HashMap::from([(
                         TransactionId(0),
-                        TransactionKind::Withdrawal,
-                        TransactionAmount::new(amount).expect("valid amount"),
-                    ),
-                )])
+                        Transaction::new(
+                            TransactionId(0),
+                            TransactionKind::Withdrawal,
+                            TransactionAmount::new(amount).expect("valid amount"),
+                        ),
+                    )]),
+                }
             );
         }
 

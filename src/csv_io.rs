@@ -316,7 +316,7 @@ chargeback,2,9,
         #[case::trailing_zeroes("1.2300", Some("1.2300"))]
         fn preserves_amount_text_and_treats_blank_amounts_as_none(
             #[case] amount: &str,
-            #[case] expected: Option<&str>,
+            #[case] expected_amount: Option<&str>,
         ) {
             let input = format!("type,client,tx,amount\ndeposit,1,2,{amount}\n");
             let row = read_transactions(input.as_bytes())
@@ -325,7 +325,15 @@ chargeback,2,9,
                 .expect("input should contain a row")
                 .expect("row should deserialize");
 
-            assert_eq!(row.amount.as_deref(), expected);
+            assert_eq!(
+                row,
+                TransactionRow {
+                    r#type: "deposit".into(),
+                    client: 1,
+                    tx: 2,
+                    amount: expected_amount.map(str::to_owned),
+                }
+            );
         }
 
         #[test]
@@ -353,8 +361,15 @@ chargeback,2,9,
                     .next()
                     .expect("input should contain a row")
                     .expect("row should deserialize");
-                assert_eq!(row.r#type, "deposit");
-                assert_eq!(row.tx, 2);
+                assert_eq!(
+                    row,
+                    TransactionRow {
+                        r#type: "deposit".into(),
+                        client: 1,
+                        tx: 2,
+                        amount: Some("1".into()),
+                    }
+                );
             }
 
             assert!(source.position() < input_len);

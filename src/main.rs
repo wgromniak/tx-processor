@@ -2,7 +2,7 @@ use std::{env, fs::File, io, path::Path, process::ExitCode};
 
 use tx_processor::{
     csv_io::{AccountRow, read_transactions, write_accounts},
-    payment_processor::PaymentProcessor,
+    domain::payment_processor::PaymentProcessor,
 };
 
 fn main() -> ExitCode {

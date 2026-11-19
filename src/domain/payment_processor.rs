@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crate::{
-    account::Account,
-    domain_types::{ClientId, DomainError, PaymentCommand},
+    domain::account::Account,
+    domain::types::{ClientId, DomainError, PaymentCommand},
 };
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -35,10 +35,10 @@ mod tests {
     use rust_decimal::Decimal;
 
     use super::PaymentProcessor;
-    use crate::account::Account;
-    use crate::domain_types::{
-        AccountStatus, ClientId, DomainError, Money, PaymentCommand, Transaction,
-        TransactionAmount, TransactionId, TransactionKind,
+    use crate::domain::account::Account;
+    use crate::domain::{
+        transaction::{Transaction, TransactionAmount, TransactionId, TransactionKind},
+        types::{AccountStatus, ClientId, DomainError, Money, PaymentCommand},
     };
 
     #[test]

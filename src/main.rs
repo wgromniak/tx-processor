@@ -25,7 +25,7 @@ fn run(input: &Path) -> Result<(), String> {
     let file = File::open(input)
         .map_err(|error| format!("Could not open '{}': {error}", input.display()))?;
     let commands = read_transactions(file)
-        .map_err(|error| format!("Could not read '{}': {error}", input.display()))?;
+        .map_err(|error| format!("Could not read '{}': {error:?}", input.display()))?;
 
     let mut processor = PaymentProcessor::new();
     for command in commands {

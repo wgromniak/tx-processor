@@ -212,15 +212,12 @@ mod tests {
         }
     }
 
-    fn assert_balance(account: &Account, available: Decimal, held: Decimal) {
-        assert_eq!(
-            account.balance,
-            Balance::new(
-                Money::new(available).expect("valid available"),
-                Money::new(held).expect("valid held"),
-            )
-            .expect("valid balance"),
-        );
+    fn test_balance(available: Decimal, held: Decimal) -> Balance {
+        Balance::new(
+            Money::new(available).expect("valid available"),
+            Money::new(held).expect("valid held"),
+        )
+        .expect("valid balance")
     }
 
     fn deposit_transaction(transaction_id: u32, amount: Decimal) -> Transaction {
@@ -228,6 +225,14 @@ mod tests {
             TransactionId(transaction_id),
             TransactionKind::Deposit,
             TransactionAmount::new(amount).expect("valid deposit amount"),
+        )
+    }
+
+    fn withdrawal_transaction(transaction_id: u32, amount: Decimal) -> Transaction {
+        Transaction::new(
+            TransactionId(transaction_id),
+            TransactionKind::Withdrawal,
+            TransactionAmount::new(amount).expect("valid withdrawal amount"),
         )
     }
 
@@ -417,18 +422,17 @@ mod tests {
                 .apply(withdrawal(0, amount))
                 .expect("withdrawal succeeds");
 
-            assert_balance(&account, available - amount, Decimal::ONE);
-            assert_eq!(account.status, AccountStatus::Active);
             assert_eq!(
-                account.transactions,
-                HashMap::from([(
-                    TransactionId(0),
-                    Transaction::new(
+                account,
+                Account {
+                    client_id: ClientId(42),
+                    balance: test_balance(available - amount, Decimal::ONE),
+                    status: AccountStatus::Active,
+                    transactions: HashMap::from([(
                         TransactionId(0),
-                        TransactionKind::Withdrawal,
-                        TransactionAmount::new(amount).expect("valid amount"),
-                    ),
-                )])
+                        withdrawal_transaction(0, amount),
+                    )]),
+                }
             );
         }
 
@@ -475,28 +479,59 @@ mod tests {
         }
 
         #[rstest]
-        #[case::deposit_then_withdrawal(deposit(1, Decimal::ONE), withdrawal(1, Decimal::ONE))]
-        #[case::withdrawal_then_deposit(withdrawal(1, Decimal::ONE), deposit(1, Decimal::ONE))]
-        #[case::duplicate_withdrawal(withdrawal(1, Decimal::ONE), withdrawal(1, Decimal::ONE))]
+        #[case::deposit_then_withdrawal(
+            deposit(1, Decimal::ONE),
+            withdrawal(1, Decimal::ONE),
+            TransactionKind::Deposit,
+            Decimal::new(3, 0)
+        )]
+        #[case::withdrawal_then_deposit(
+            withdrawal(1, Decimal::ONE),
+            deposit(1, Decimal::ONE),
+            TransactionKind::Withdrawal,
+            Decimal::ONE
+        )]
+        #[case::duplicate_withdrawal(
+            withdrawal(1, Decimal::ONE),
+            withdrawal(1, Decimal::ONE),
+            TransactionKind::Withdrawal,
+            Decimal::ONE
+        )]
         fn payment_ids_cannot_be_reused(
             #[case] first: PaymentCommand,
             #[case] duplicate: PaymentCommand,
+            #[case] kind: TransactionKind,
+            #[case] available: Decimal,
         ) {
-            let initial = || {
-                let mut account = Account::new(ClientId(42));
-                account
-                    .apply(deposit(9, Decimal::new(2, 0)))
-                    .expect("funding succeeds");
-                account.apply(first).expect("first payment succeeds");
-                account
-            };
-            let mut account = initial();
+            let mut account = Account::new(ClientId(42));
+            account
+                .apply(deposit(9, Decimal::new(2, 0)))
+                .expect("funding succeeds");
+            account.apply(first).expect("first payment succeeds");
 
             assert_eq!(
                 account.apply(duplicate),
                 Err(DomainError::DuplicateTransaction)
             );
-            assert_eq!(account, initial());
+            assert_eq!(
+                account,
+                Account {
+                    client_id: ClientId(42),
+                    balance: test_balance(available, Decimal::ZERO),
+                    status: AccountStatus::Active,
+                    transactions: HashMap::from([
+                        (TransactionId(9), deposit_transaction(9, Decimal::new(2, 0))),
+                        (
+                            TransactionId(1),
+                            Transaction::new(
+                                TransactionId(1),
+                                kind,
+                                TransactionAmount::new(Decimal::ONE).expect("valid amount"),
+                            )
+                        ),
+                    ]),
+                }
+            );
         }
     }
 
@@ -504,6 +539,8 @@ mod tests {
         use rstest::rstest;
 
         use super::*;
+        use crate::domain_types::AccountStatus::{Active, Locked};
+        use crate::domain_types::TransactionState::{ChargedBack, Disputed, Normal};
 
         fn dispute(transaction_id: u32) -> PaymentCommand {
             PaymentCommand::Dispute {
@@ -561,23 +598,36 @@ mod tests {
                 .apply(withdrawal(3, Decimal::ONE))
                 .expect("withdrawal succeeds");
 
-            for (command, available, held, state) in [
-                (dispute(1), -9_999, 12_345, TransactionState::Disputed),
-                (dispute(2), -10_000, 12_346, TransactionState::Disputed),
-                (resolve(1), 2_345, 1, TransactionState::Normal),
-                (dispute(1), -10_000, 12_346, TransactionState::Disputed),
-                (resolve(2), -9_999, 12_345, TransactionState::Disputed),
+            for (command, available, held, first_state, second_state) in [
+                (dispute(1), -9_999, 12_345, Disputed, Normal),
+                (dispute(2), -10_000, 12_346, Disputed, Disputed),
+                (resolve(1), 2_345, 1, Normal, Disputed),
+                (dispute(1), -10_000, 12_346, Disputed, Disputed),
+                (resolve(2), -9_999, 12_345, Disputed, Normal),
             ] {
                 account.apply(command).expect("dispute transition succeeds");
-                assert_balance(&account, Decimal::new(available, 4), Decimal::new(held, 4));
-                assert_eq!(account.balance.total().value(), Decimal::new(2_346, 4));
-                assert_eq!(account.transactions[&TransactionId(1)].state(), state);
-                assert_eq!(account.status, AccountStatus::Active);
+                assert_eq!(
+                    account,
+                    Account {
+                        client_id: ClientId(42),
+                        balance: test_balance(Decimal::new(available, 4), Decimal::new(held, 4)),
+                        status: Active,
+                        transactions: HashMap::from([
+                            (
+                                TransactionId(1),
+                                deposit_transaction(1, Decimal::new(12_345, 4))
+                                    .with_test_state(first_state)
+                            ),
+                            (
+                                TransactionId(2),
+                                deposit_transaction(2, Decimal::new(1, 4))
+                                    .with_test_state(second_state)
+                            ),
+                            (TransactionId(3), withdrawal_transaction(3, Decimal::ONE)),
+                        ]),
+                    }
+                );
             }
-            assert_eq!(
-                account.transactions[&TransactionId(2)].state(),
-                TransactionState::Normal
-            );
         }
 
         #[test]
@@ -592,29 +642,54 @@ mod tests {
             ] {
                 account.apply(command).expect("command succeeds");
             }
-            assert_balance(&account, Decimal::ZERO, Decimal::ONE);
-            assert_eq!(account.status, AccountStatus::Locked);
             assert_eq!(
-                account.transactions[&TransactionId(1)].state(),
-                TransactionState::ChargedBack
+                account,
+                Account {
+                    client_id: ClientId(42),
+                    balance: test_balance(Decimal::ZERO, Decimal::ONE),
+                    status: Locked,
+                    transactions: HashMap::from([
+                        (
+                            TransactionId(1),
+                            deposit_transaction(1, Decimal::new(2, 0)).with_test_state(ChargedBack)
+                        ),
+                        (
+                            TransactionId(2),
+                            deposit_transaction(2, Decimal::ONE).with_test_state(Disputed)
+                        ),
+                    ]),
+                }
             );
 
-            for (command, available, held) in [
-                (deposit(3, Decimal::ONE), 1, 1),
-                (withdrawal(4, Decimal::ONE), 1, 1),
-                (resolve(2), 2, 0),
-                (dispute(2), 1, 1),
-                (chargeback(2), 1, 0),
+            for (command, available, held, state) in [
+                (deposit(3, Decimal::ONE), 1, 1, Disputed),
+                (withdrawal(4, Decimal::ONE), 1, 1, Disputed),
+                (resolve(2), 2, 0, Normal),
+                (dispute(2), 1, 1, Disputed),
+                (chargeback(2), 1, 0, ChargedBack),
             ] {
                 account.apply(command).expect("command is handled");
-                assert_balance(&account, Decimal::new(available, 0), Decimal::new(held, 0));
-                assert_eq!(account.status, AccountStatus::Locked);
+                assert_eq!(
+                    account,
+                    Account {
+                        client_id: ClientId(42),
+                        balance: test_balance(Decimal::new(available, 0), Decimal::new(held, 0)),
+                        status: Locked,
+                        transactions: HashMap::from([
+                            (
+                                TransactionId(1),
+                                deposit_transaction(1, Decimal::new(2, 0))
+                                    .with_test_state(ChargedBack)
+                            ),
+                            (
+                                TransactionId(2),
+                                deposit_transaction(2, Decimal::ONE).with_test_state(state)
+                            ),
+                            (TransactionId(3), deposit_transaction(3, Decimal::ONE)),
+                        ]),
+                    }
+                );
             }
-            assert!(!account.transactions.contains_key(&TransactionId(4)));
-            assert_eq!(
-                account.transactions[&TransactionId(2)].state(),
-                TransactionState::ChargedBack
-            );
         }
 
         #[rstest]
@@ -628,61 +703,94 @@ mod tests {
             account
                 .apply(withdrawal(0, amount))
                 .expect("withdrawal succeeds");
-            account.apply(dispute(u32::MAX)).expect("dispute succeeds");
-            assert_balance(&account, -amount, amount);
-            account.apply(resolve(u32::MAX)).expect("resolve succeeds");
-            assert_balance(&account, Decimal::ZERO, Decimal::ZERO);
-            account
-                .apply(dispute(u32::MAX))
-                .expect("redispute succeeds");
-            account
-                .apply(chargeback(u32::MAX))
-                .expect("chargeback succeeds");
-            assert_balance(&account, -amount, Decimal::ZERO);
-            assert_eq!(account.status, AccountStatus::Locked);
-            assert_eq!(
-                account.transactions[&TransactionId(u32::MAX)].state(),
-                TransactionState::ChargedBack
-            );
+
+            for (command, available, held, state, status) in [
+                (dispute(u32::MAX), -amount, amount, Disputed, Active),
+                (
+                    resolve(u32::MAX),
+                    Decimal::ZERO,
+                    Decimal::ZERO,
+                    Normal,
+                    Active,
+                ),
+                (dispute(u32::MAX), -amount, amount, Disputed, Active),
+                (
+                    chargeback(u32::MAX),
+                    -amount,
+                    Decimal::ZERO,
+                    ChargedBack,
+                    Locked,
+                ),
+            ] {
+                account.apply(command).expect("dispute transition succeeds");
+                assert_eq!(
+                    account,
+                    Account {
+                        client_id: ClientId(42),
+                        balance: test_balance(available, held),
+                        status,
+                        transactions: HashMap::from([
+                            (
+                                TransactionId(u32::MAX),
+                                deposit_transaction(u32::MAX, amount).with_test_state(state)
+                            ),
+                            (TransactionId(0), withdrawal_transaction(0, amount)),
+                        ]),
+                    }
+                );
+            }
         }
 
         #[rstest]
-        #[case::missing_dispute(TransactionState::Normal, dispute(99))]
-        #[case::missing_resolve(TransactionState::Normal, resolve(99))]
-        #[case::missing_chargeback(TransactionState::Normal, chargeback(99))]
-        #[case::withdrawal_dispute(TransactionState::Normal, dispute(2))]
-        #[case::withdrawal_resolve(TransactionState::Normal, resolve(2))]
-        #[case::withdrawal_chargeback(TransactionState::Normal, chargeback(2))]
-        #[case::repeated_dispute(TransactionState::Disputed, dispute(1))]
-        #[case::undisputed_resolve(TransactionState::Normal, resolve(1))]
-        #[case::undisputed_chargeback(TransactionState::Normal, chargeback(1))]
-        #[case::charged_back_dispute(TransactionState::ChargedBack, dispute(1))]
-        #[case::charged_back_resolve(TransactionState::ChargedBack, resolve(1))]
-        #[case::repeated_chargeback(TransactionState::ChargedBack, chargeback(1))]
+        #[case::missing_dispute(Normal, 1, 0, Active, dispute(99))]
+        #[case::missing_resolve(Normal, 1, 0, Active, resolve(99))]
+        #[case::missing_chargeback(Normal, 1, 0, Active, chargeback(99))]
+        #[case::withdrawal_dispute(Normal, 1, 0, Active, dispute(2))]
+        #[case::withdrawal_resolve(Normal, 1, 0, Active, resolve(2))]
+        #[case::withdrawal_chargeback(Normal, 1, 0, Active, chargeback(2))]
+        #[case::repeated_dispute(Disputed, -1, 2, Active, dispute(1))]
+        #[case::undisputed_resolve(Normal, 1, 0, Active, resolve(1))]
+        #[case::undisputed_chargeback(Normal, 1, 0, Active, chargeback(1))]
+        #[case::charged_back_dispute(ChargedBack, -1, 0, Locked, dispute(1))]
+        #[case::charged_back_resolve(ChargedBack, -1, 0, Locked, resolve(1))]
+        #[case::repeated_chargeback(ChargedBack, -1, 0, Locked, chargeback(1))]
         fn invalid_dispute_transitions_are_ignored(
             #[case] state: TransactionState,
+            #[case] available: i64,
+            #[case] held: i64,
+            #[case] status: AccountStatus,
             #[case] command: PaymentCommand,
         ) {
-            let initial = || {
-                let mut account = Account::new(ClientId(42));
-                account
-                    .apply(deposit(1, Decimal::new(2, 0)))
-                    .expect("deposit succeeds");
-                account
-                    .apply(withdrawal(2, Decimal::ONE))
-                    .expect("withdrawal succeeds");
-                if state != TransactionState::Normal {
-                    account.apply(dispute(1)).expect("dispute succeeds");
-                }
-                if state == TransactionState::ChargedBack {
-                    account.apply(chargeback(1)).expect("chargeback succeeds");
-                }
-                account
+            let balance = test_balance(Decimal::new(available, 0), Decimal::new(held, 0));
+            let mut account = Account {
+                client_id: ClientId(42),
+                balance,
+                status,
+                transactions: HashMap::from([
+                    (
+                        TransactionId(1),
+                        deposit_transaction(1, Decimal::new(2, 0)).with_test_state(state),
+                    ),
+                    (TransactionId(2), withdrawal_transaction(2, Decimal::ONE)),
+                ]),
             };
-            let mut account = initial();
 
             assert_eq!(account.apply(command), Ok(()));
-            assert_eq!(account, initial());
+            assert_eq!(
+                account,
+                Account {
+                    client_id: ClientId(42),
+                    balance,
+                    status,
+                    transactions: HashMap::from([
+                        (
+                            TransactionId(1),
+                            deposit_transaction(1, Decimal::new(2, 0)).with_test_state(state)
+                        ),
+                        (TransactionId(2), withdrawal_transaction(2, Decimal::ONE)),
+                    ]),
+                }
+            );
         }
 
         #[rstest]
@@ -692,21 +800,29 @@ mod tests {
             #[case] available: Money,
             #[case] held: Money,
         ) {
-            let initial = || {
-                Account::new(ClientId(42)).with_test_state(
-                    available,
-                    held,
-                    AccountStatus::Active,
-                    HashMap::from([(TransactionId(1), deposit_transaction(1, Decimal::new(1, 4)))]),
-                )
-            };
-            let mut account = initial();
+            let mut account = Account::new(ClientId(42)).with_test_state(
+                available,
+                held,
+                Active,
+                HashMap::from([(TransactionId(1), deposit_transaction(1, Decimal::new(1, 4)))]),
+            );
 
             assert_eq!(
                 account.apply(dispute(1)),
                 Err(DomainError::AmountOutOfRange)
             );
-            assert_eq!(account, initial());
+            assert_eq!(
+                account,
+                Account {
+                    client_id: ClientId(42),
+                    balance: Balance::new(available, held).expect("valid balance"),
+                    status: Active,
+                    transactions: HashMap::from([(
+                        TransactionId(1),
+                        deposit_transaction(1, Decimal::new(1, 4)),
+                    )]),
+                }
+            );
         }
     }
 }

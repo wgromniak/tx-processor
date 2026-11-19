@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::{
     account::Account,
+    payment_processor::PaymentProcessor,
     transaction::{TransactionAmount, TransactionId},
     types::{AccountStatus, ClientId, DomainError, PaymentCommand},
 };
@@ -18,6 +19,45 @@ pub fn read_transactions(
     reader.headers()?;
 
     Ok(reader.into_deserialize())
+}
+
+pub fn process_transactions(
+    rows: impl Iterator<Item = Result<TransactionRow, csv::Error>>,
+    output: impl Write,
+) -> Result<(), String> {
+    let mut processor = PaymentProcessor::new();
+
+    for row in rows {
+        let row = match row {
+            Ok(row) => row,
+            Err(error) => {
+                let message = format!("Could not read transaction: {error}");
+                if error.is_io_error() {
+                    return Err(message);
+                }
+                eprintln!("{message}");
+                continue;
+            }
+        };
+
+        let command = match row.into_command() {
+            Ok(command) => command,
+            Err(error) => {
+                eprintln!("Invalid transaction: {error:?}");
+                continue;
+            }
+        };
+
+        processor
+            .process(command)
+            .map_err(|error| format!("Could not process transaction: {error:?}"))?;
+    }
+
+    let accounts = processor
+        .accounts()
+        .into_iter()
+        .map(AccountRow::from_account);
+    write_accounts(output, accounts).map_err(|error| format!("Could not write accounts: {error}"))
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -118,6 +158,16 @@ pub enum CsvError {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{self, Read};
+
+    struct FailingReader;
+
+    impl Read for FailingReader {
+        fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::other("input read failed"))
+        }
+    }
+
     mod from_account {
         use std::collections::HashMap;
 
@@ -223,19 +273,13 @@ mod tests {
     }
 
     mod read_transactions {
-        use std::io::{self, Cursor, Read};
+        use std::io::Cursor;
 
         use rstest::rstest;
 
         use crate::csv_io::{TransactionRow, read_transactions};
 
-        struct FailingReader;
-
-        impl Read for FailingReader {
-            fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
-                Err(io::Error::other("input read failed"))
-            }
-        }
+        use super::FailingReader;
 
         #[test]
         fn reads_mixed_transactions_in_input_order() {
@@ -373,6 +417,30 @@ chargeback,2,9,
             }
 
             assert!(source.position() < input_len);
+        }
+    }
+
+    mod process_transactions {
+        use std::io::Read;
+
+        use crate::csv_io::{process_transactions, read_transactions};
+
+        use super::FailingReader;
+
+        #[test]
+        fn fails_without_writing_accounts_after_input_read_error() {
+            let input = b"type,client,tx,amount\ndeposit,1,1,1\n";
+            let rows = read_transactions(input.as_slice().chain(FailingReader))
+                .expect("headers should be readable");
+            let mut output = Vec::new();
+
+            let result = process_transactions(rows, &mut output);
+
+            assert_eq!(output, b"");
+            assert_eq!(
+                result,
+                Err("Could not read transaction: input read failed".into())
+            );
         }
     }
 

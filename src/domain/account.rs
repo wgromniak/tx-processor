@@ -188,6 +188,7 @@ impl Account {
 mod tests {
     use std::collections::HashMap;
 
+    use rstest::rstest;
     use rust_decimal::Decimal;
 
     use super::Account;
@@ -197,21 +198,6 @@ mod tests {
         },
         types::{AccountStatus, Balance, ClientId, DomainError, Money, PaymentCommand},
     };
-
-    #[test]
-    fn new_account_starts_active_with_a_zero_balance() {
-        let account = Account::new(ClientId(42));
-
-        assert_eq!(
-            account,
-            Account {
-                client_id: ClientId(42),
-                balance: Balance::ZERO,
-                status: AccountStatus::Active,
-                transactions: HashMap::new(),
-            }
-        );
-    }
 
     fn deposit(transaction_id: u32, amount: Decimal) -> PaymentCommand {
         PaymentCommand::Deposit {
@@ -226,6 +212,27 @@ mod tests {
             client_id: ClientId(42),
             transaction_id: TransactionId(transaction_id),
             amount: TransactionAmount::new(amount).expect("valid withdrawal amount"),
+        }
+    }
+
+    fn dispute(transaction_id: u32) -> PaymentCommand {
+        PaymentCommand::Dispute {
+            client_id: ClientId(42),
+            transaction_id: TransactionId(transaction_id),
+        }
+    }
+
+    fn resolve(transaction_id: u32) -> PaymentCommand {
+        PaymentCommand::Resolve {
+            client_id: ClientId(42),
+            transaction_id: TransactionId(transaction_id),
+        }
+    }
+
+    fn chargeback(transaction_id: u32) -> PaymentCommand {
+        PaymentCommand::Chargeback {
+            client_id: ClientId(42),
+            transaction_id: TransactionId(transaction_id),
         }
     }
 
@@ -248,9 +255,35 @@ mod tests {
         )
     }
 
-    mod deposits {
-        use rstest::rstest;
+    #[test]
+    fn new_account_starts_active_with_a_zero_balance() {
+        let account = Account::new(ClientId(42));
 
+        assert_eq!(
+            account,
+            Account {
+                client_id: ClientId(42),
+                balance: Balance::ZERO,
+                status: AccountStatus::Active,
+                transactions: HashMap::new(),
+            }
+        );
+    }
+
+    #[rstest]
+    #[case::deposit(deposit(1, Decimal::ONE))]
+    #[case::withdrawal(withdrawal(1, Decimal::ONE))]
+    #[case::dispute(dispute(1))]
+    #[case::resolve(resolve(1))]
+    #[case::chargeback(chargeback(1))]
+    fn command_for_another_client_leaves_the_account_unchanged(#[case] command: PaymentCommand) {
+        let mut account = Account::new(ClientId(7));
+
+        assert_eq!(account.apply(command), Err(DomainError::ClientMismatch));
+        assert_eq!(account, Account::new(ClientId(7)));
+    }
+
+    mod deposits {
         use super::*;
 
         #[rstest]
@@ -332,17 +365,6 @@ mod tests {
         }
 
         #[test]
-        fn deposit_for_another_client_leaves_the_account_unchanged() {
-            let mut account = Account::new(ClientId(7));
-
-            assert_eq!(
-                account.apply(deposit(1, Decimal::ONE)),
-                Err(DomainError::ClientMismatch)
-            );
-            assert_eq!(account, Account::new(ClientId(7)));
-        }
-
-        #[test]
         fn duplicate_deposit_does_not_credit_again_or_overwrite_history() {
             let mut account = Account::new(ClientId(42));
             account
@@ -412,9 +434,16 @@ mod tests {
     }
 
     mod withdrawals {
-        use rstest::rstest;
-
         use super::*;
+
+        fn funded_account_after_payment(command: PaymentCommand) -> Account {
+            let mut account = Account::new(ClientId(42));
+            account
+                .apply(deposit(9, Decimal::new(2, 0)))
+                .expect("funding succeeds");
+            account.apply(command).expect("first payment succeeds");
+            account
+        }
 
         #[rstest]
         #[case::fractional(Decimal::new(12_345, 4), Decimal::new(1, 4))]
@@ -447,17 +476,6 @@ mod tests {
                     ),
                 )])
             );
-        }
-
-        #[test]
-        fn withdrawal_for_another_client_leaves_the_account_unchanged() {
-            let mut account = Account::new(ClientId(7));
-
-            assert_eq!(
-                account.apply(withdrawal(1, Decimal::ONE)),
-                Err(DomainError::ClientMismatch)
-            );
-            assert_eq!(account, Account::new(ClientId(7)));
         }
 
         #[rstest]
@@ -499,27 +517,17 @@ mod tests {
             #[case] first: PaymentCommand,
             #[case] duplicate: PaymentCommand,
         ) {
-            let initial = || {
-                let mut account = Account::new(ClientId(42));
-                account
-                    .apply(deposit(9, Decimal::new(2, 0)))
-                    .expect("funding succeeds");
-                account.apply(first).expect("first payment succeeds");
-                account
-            };
-            let mut account = initial();
+            let mut account = funded_account_after_payment(first);
 
             assert_eq!(
                 account.apply(duplicate),
                 Err(DomainError::DuplicateTransaction)
             );
-            assert_eq!(account, initial());
+            assert_eq!(account, funded_account_after_payment(first));
         }
     }
 
     mod disputes {
-        use rstest::rstest;
-
         use super::*;
         use crate::domain::transaction::TransactionState::{ChargedBack, Disputed, Normal};
         use crate::domain::types::AccountStatus::{Active, Locked};
@@ -538,49 +546,6 @@ mod tests {
                 TransactionKind::Withdrawal,
                 TransactionAmount::new(amount).expect("valid withdrawal amount"),
             )
-        }
-
-        fn dispute(transaction_id: u32) -> PaymentCommand {
-            PaymentCommand::Dispute {
-                client_id: ClientId(42),
-                transaction_id: TransactionId(transaction_id),
-            }
-        }
-
-        fn resolve(transaction_id: u32) -> PaymentCommand {
-            PaymentCommand::Resolve {
-                client_id: ClientId(42),
-                transaction_id: TransactionId(transaction_id),
-            }
-        }
-
-        fn chargeback(transaction_id: u32) -> PaymentCommand {
-            PaymentCommand::Chargeback {
-                client_id: ClientId(42),
-                transaction_id: TransactionId(transaction_id),
-            }
-        }
-
-        #[rstest]
-        #[case::dispute(dispute(1))]
-        #[case::resolve(resolve(1))]
-        #[case::chargeback(chargeback(1))]
-        fn command_for_another_client_leaves_the_account_unchanged(
-            #[case] command: PaymentCommand,
-        ) {
-            let mut account = Account::new(ClientId(7));
-
-            assert_eq!(account.apply(command), Err(DomainError::ClientMismatch));
-
-            assert_eq!(
-                account,
-                Account {
-                    client_id: ClientId(7),
-                    balance: Balance::ZERO,
-                    status: AccountStatus::Active,
-                    transactions: HashMap::new(),
-                }
-            );
         }
 
         #[test]

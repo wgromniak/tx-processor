@@ -244,6 +244,7 @@ mod tests {
     }
 
     mod transaction_amount {
+        use rstest::rstest;
         use rust_decimal::Decimal;
 
         use crate::domain::{
@@ -251,41 +252,28 @@ mod tests {
             types::{DomainError, Money},
         };
 
-        #[test]
-        fn transaction_amount_requires_positive_money() {
-            let value = Decimal::new(1, 4);
+        #[rstest]
+        #[case::smallest_amount(Decimal::new(1, 4))]
+        #[case::maximum_amount(Money::MAX.value())]
+        fn accepts_positive_money(#[case] value: Decimal) {
             let amount = TransactionAmount::new(value).expect("positive money should be accepted");
+
             assert_eq!(
                 amount,
                 TransactionAmount(Money::new(value).expect("valid money"))
             );
-
-            for value in [Decimal::ZERO, Decimal::new(-1, 4)] {
-                assert_eq!(
-                    TransactionAmount::new(value),
-                    Err(DomainError::NonPositiveAmount)
-                );
-            }
         }
 
-        #[test]
-        fn transaction_amount_enforces_money_precision() {
-            assert_eq!(
-                TransactionAmount::new(Decimal::new(1, 5)),
-                Err(DomainError::ExcessivePrecision)
-            );
-        }
-
-        #[test]
-        fn transaction_amount_enforces_the_money_limit() {
-            assert_eq!(
-                TransactionAmount::new(Money::MAX.value()),
-                Ok(TransactionAmount(Money::MAX))
-            );
-            assert_eq!(
-                TransactionAmount::new(Money::MAX.value() + Decimal::new(1, 4)),
-                Err(DomainError::AmountOutOfRange)
-            );
+        #[rstest]
+        #[case::zero(Decimal::ZERO, DomainError::NonPositiveAmount)]
+        #[case::negative(Decimal::new(-1, 4), DomainError::NonPositiveAmount)]
+        #[case::excessive_precision(Decimal::new(1, 5), DomainError::ExcessivePrecision)]
+        #[case::above_money_limit(
+            Money::MAX.value() + Decimal::new(1, 4),
+            DomainError::AmountOutOfRange
+        )]
+        fn rejects_invalid_amounts(#[case] value: Decimal, #[case] expected: DomainError) {
+            assert_eq!(TransactionAmount::new(value), Err(expected));
         }
     }
 }
